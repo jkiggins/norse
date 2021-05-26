@@ -35,6 +35,12 @@ class STDPState:
             a_pre (torch.Tensor): presynaptic trace
             a_post (torch.Tensor): postsynaptic trace
             dt (float): time-resolution
+
+        t_pre and t_post have the same shape as inputs for a single time step (I don't know if
+        that is right). The value of t_pre and t_post decay at some rate, proptional to the 
+        difference between t_pre/post and z_pre/post multiplied by a factor
+
+        Basically this is a value that represents the recent spiking activity.
         """
         self.t_pre = self.t_pre + (dt * tau_pre_inv * (-self.t_pre + a_pre * z_pre))
         self.t_post = self.t_post + (
@@ -140,6 +146,7 @@ def stdp_step_linear(
     state_stdp: STDPState,
     p_stdp: STDPParameters = STDPParameters(),
     dt: float = 0.001,
+    invert: bool = False,
 ) -> Tuple[torch.Tensor, STDPState]:
     """STDP step for a FF LIF layer.
     Input:
@@ -166,8 +173,15 @@ def stdp_step_linear(
     )
 
     # STDP weight update
+    """
+    
+    """
     dw_plus = p_stdp.A_plus(w) * torch.einsum("bi,bj->ij", z_post, state_stdp.t_pre)
     dw_minus = p_stdp.A_minus(w) * torch.einsum("bi,bj->ij", state_stdp.t_post, z_pre)
+
+    import code
+    code.interact(local=dict(globals(), **locals()))
+    exit(1)
 
     w = w + (dw_plus - dw_minus)
 
@@ -184,6 +198,7 @@ def stdp_step_conv2d(
     state_stdp: STDPState,
     p_stdp: STDPParameters = STDPParameters(),
     dt: float = 0.001,
+    invert: bool = False,
 ) -> Tuple[torch.Tensor, STDPState]:
     """STDP step for a conv2d LIF layer.
     Input:
@@ -256,3 +271,26 @@ def stdp_step_conv2d(
     w = p_stdp.bounding_func(w)
 
     return (w, state_stdp)
+
+
+def stdp_step_reward(
+    z_pre: torch.Tensor,
+    z_post: torch.Tensor,
+    w: torch.Tensor,
+    state_stdp: STDPState = STDPState,
+    p_stdp: STDPParameters = STDPParameters(),
+    conv=False,
+    reward = 1.0,
+    dt: float = 0.001,
+):
+
+    """
+    Step of reward modulated STDP
+
+    If the reward is > 0, perform stdp, scaled by reward. If less than 0,
+    perform anti-stdp, scaled by the reward.
+    """
+
+    if reward < 0:
+        reward = -reward
+    

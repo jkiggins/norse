@@ -187,7 +187,6 @@ def load(path, model, optimizer):
 
 
 def main(args):
-    writer = SummaryWriter()
 
     torch.manual_seed(args.random_seed)
     np.random.seed(args.random_seed)
@@ -229,6 +228,24 @@ def main(args):
         batch_size=args.batch_size,
         **kwargs,
     )
+
+    label = os.environ.get("SLURM_JOB_ID", str(uuid.uuid4()))
+    if FLAGS.prefix:
+        path = f"runs/mnist/{FLAGS.prefix}/{label}"
+    else:
+        path = f"runs/mnist/{label}"
+
+    os.makedirs(path, exist_ok=True)
+    
+    try:
+        from torch.utils.tensorboard import SummaryWriter
+
+        writer = SummaryWriter(log_dir=os.path.abspath(path))
+    except ImportError:
+        writer = None
+
+    os.chdir(path)
+    FLAGS.append_flags_into_file("flags.txt")
 
     input_features = 28 * 28
 

@@ -81,7 +81,6 @@ class LIFCell(SNNCell):
                 p=p,
                 **kwargs,
             )
-
     def initial_state(self, input_tensor: torch.Tensor) -> LIFFeedForwardState:
         state = LIFFeedForwardState(
             v=torch.full(
