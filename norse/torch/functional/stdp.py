@@ -16,6 +16,17 @@ class STDPState:
         self.t_pre = t_pre
         self.t_post = t_post
 
+        self.t_pre.requires_grad = False
+        self.t_post.requires_grad = False
+
+        
+    def to(self, device):
+        self.t_pre.to(device)
+        self.t_post.to(device)
+
+        return self
+        
+
     def decay(
         self,
         z_pre: torch.Tensor,
@@ -43,10 +54,15 @@ class STDPState:
         Basically this is a value that represents the recent spiking activity.
         """
         self.t_pre = self.t_pre + (dt * tau_pre_inv * (-self.t_pre + a_pre * z_pre))
+            
         self.t_post = self.t_post + (
             dt * tau_post_inv * (-self.t_post + a_post * z_post)
         )
 
+        # import code
+        # code.interact(local=dict(globals(), **locals()))
+        # exit(1)
+        
 
 class STDPParameters:
     """STDP parameters.
@@ -102,6 +118,11 @@ class STDPParameters:
         self.eta_plus = eta_plus
         self.eta_minus = eta_minus
 
+        self.a_pre.requires_grad = False
+        self.a_post.requires_grad = False
+        self.tau_pre_inv.requires_grad = False
+        self.tau_post_inv.requires_grad = False
+
         self.stdp_algorithm = stdp_algorithm
         if self.stdp_algorithm == "additive":
             self.mu = torch.tensor(0.0)
@@ -138,7 +159,21 @@ class STDPParameters:
             self.padding = padding
             self.dilation = dilation
 
+            
+    def to(self, device):
+        self.a_pre = self.a_pre.to(device)
+        self.a_post = self.a_post.to(device)
+        self.tau_pre_inv = self.tau_pre_inv.to(device)
+        self.tau_post_inv = self.tau_post_inv.to(device)
+        # self.w_min.to(device)
+        # self.w_max.to(device)
+        # self.eta_plus.to(device)
+        # self.eta_minus.to(device)
+        self.mu = self.mu.to(device)
 
+        return self
+
+    
 def stdp_step_linear(
     z_pre: torch.Tensor,
     z_post: torch.Tensor,
@@ -174,21 +209,20 @@ def stdp_step_linear(
 
     # STDP weight update
     """
-    
-    """
+    This assumes full connection between neurons reprsented by t_pre/z_post. It also sums
+    the weight updates along the batch dimension.
+
+    # """
     dw_plus = p_stdp.A_plus(w) * torch.einsum("bi,bj->ij", z_post, state_stdp.t_pre)
     dw_minus = p_stdp.A_minus(w) * torch.einsum("bi,bj->ij", state_stdp.t_post, z_pre)
 
-    import code
-    code.interact(local=dict(globals(), **locals()))
-    exit(1)
-
-    w = w + (dw_plus - dw_minus)
+    dw = dw_plus - dw_minus
+    w = w + dw
 
     # Bound checking
     w = p_stdp.bounding_func(w)
 
-    return (w, state_stdp)
+    return (w, state_stdp, dw)
 
 
 def stdp_step_conv2d(
@@ -265,12 +299,14 @@ def stdp_step_conv2d(
         ).view(w.shape)
     )
 
-    w = w + (dw_plus - dw_minus)
+    dw = dw_plus - dw_minus
+    w = w + dw
+
 
     # Bound checking
     w = p_stdp.bounding_func(w)
 
-    return (w, state_stdp)
+    return (w, state_stdp, dw)
 
 
 def stdp_step_reward(

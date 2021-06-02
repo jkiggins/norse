@@ -46,12 +46,28 @@ class SNNCell(torch.nn.Module):
         self.p = p
         self.dt = dt
 
+        self.requires_grad = True
+
     def extra_repr(self) -> str:
         return f"p={self.p}, dt={self.dt}"
 
-    def forward(self, input_tensor: torch.Tensor, state: Optional[Any] = None):
+    def no_grad(self):
+        self.requires_grad = False
+
+    def _forward(self, input_tensor: torch.Tensor, state: Optional[Any] = None):
         state = state if state is not None else self.state_fallback(input_tensor)
+
         return self.activation(input_tensor, state, self.p, self.dt)
+
+    
+    def forward(self, input_tensor: torch.Tensor, state: Optional[Any] = None):
+        if not self.requires_grad:
+            with torch.no_grad():
+                return self._forward(input_tensor, state)
+
+        return self._forward(input_tensor, state)
+        
+            
 
 
 class SNNRecurrentCell(torch.nn.Module):

@@ -2,61 +2,20 @@
 In this task, we train a spiking convolutional network to learn the
 MNIST digit recognition task.
 """
+from argparse import ArgumentParser
 import os
 import uuid
-
-from absl import app
-from absl import flags
-from absl import logging
 
 import numpy as np
 import matplotlib.pyplot as plt
 
 import torch
 import torch.utils.data
+from torch.utils.tensorboard import SummaryWriter
 import torchvision
 
 from norse.torch.models.conv import ConvNetStdp
 from norse.torch.module.encode import ConstantCurrentLIFEncoder
-
-FLAGS = flags.FLAGS
-
-flags.DEFINE_bool("save_grads", False, "Save gradients of backward pass.")
-flags.DEFINE_integer(
-    "grad_save_interval", 10, "Interval for gradient saving of backward pass."
-)
-flags.DEFINE_bool("refrac", False, "Use refractory time.")
-flags.DEFINE_integer("plot_interval", 10, "Interval for plotting.")
-flags.DEFINE_float("input_scale", 1, "Scaling factor for input current.")
-flags.DEFINE_bool(
-    "find_learning_rate", False, "Use learning rate finder to find learning rate."
-)
-flags.DEFINE_enum("device", "cpu", ["cpu", "cuda"], "Device to use by pytorch.")
-flags.DEFINE_integer("epochs", 10, "Number of training episodes to do.")
-flags.DEFINE_integer("seq_length", 200, "Number of timesteps to do.")
-flags.DEFINE_integer("batch_size", 32, "Number of examples in one minibatch.")
-flags.DEFINE_enum(
-    "model",
-    "super",
-    ["super", "tanh", "circ", "logistic", "circ_dist"],
-    "Model to use for training.",
-)
-flags.DEFINE_string("prefix", "", "Prefix to use for saving the results")
-flags.DEFINE_enum(
-    "optimizer", "adam", ["adam", "sgd"], "Optimizer to use for training."
-)
-flags.DEFINE_bool("clip_grad", False, "Clip gradient during backpropagation")
-flags.DEFINE_float("grad_clip_value", 1.0, "Gradient to clip at.")
-flags.DEFINE_float("learning_rate", 2e-3, "Learning rate to use.")
-flags.DEFINE_integer(
-    "log_interval", 10, "In which intervals to display learning progress."
-)
-flags.DEFINE_integer("model_save_interval", 50, "Save model every so many epochs.")
-flags.DEFINE_boolean("save_model", True, "Save the model after training.")
-flags.DEFINE_boolean("big_net", False, "Use bigger net...")
-flags.DEFINE_boolean("only_output", False, "Train only the last layer...")
-flags.DEFINE_boolean("do_plot", False, "Do intermediate plots")
-flags.DEFINE_integer("random_seed", 1234, "Random seed to use")
 
 
 class LIFConvNet(torch.nn.Module):
@@ -64,31 +23,67 @@ class LIFConvNet(torch.nn.Module):
         self,
         input_features,
         seq_length,
+        input_scale,
         model="super",
+        only_first_spike=False,
     ):
         super(LIFConvNet, self).__init__()
         self.constant_current_encoder = ConstantCurrentLIFEncoder(seq_length=seq_length)
+        self.only_first_spike = only_first_spike
         self.input_features = input_features
         self.rsnn = ConvNetStdp(method=model)
         self.seq_length = seq_length
+        self.input_scale = input_scale
+
+    def to(self, device):
+        super(LIFConvNet, self).to(device)
+
+        self.rsnn = self.rsnn.to(device)
+
+        return self
+
+
+    def no_grad(self):
+        for p in self.parameters():
+            p.requires_grad = False
+
+        self.rsnn.no_grad()
+    
 
     def forward(self, x, stdp=True):
         batch_size = x.shape[0]
 
         # Add time dimension using some encoder
         x = self.constant_current_encoder(
-            x.view(-1, self.input_features) * FLAGS.input_scale
+            x.view(-1, self.input_features) * self.input_scale
         )
 
         x = x.reshape(self.seq_length, batch_size, 1, 28, 28)
         voltages = self.rsnn(x, stdp=stdp)
         m, _ = torch.max(voltages, 0)
-        log_p_y = torch.nn.functional.log_softmax(m, dim=1)
+        log_p_y = torch.nn.functional.log_softmax(m, dim=1)\
+            
         return log_p_y
 
 
-def train(model, device, train_loader, epoch, writer=None):
-    model.train()
+def train(
+    model,
+    device,
+    train_loader,
+    epoch,
+    clip_grad,
+    grad_clip_value,
+    epochs,
+    log_interval,
+    do_plot,
+    plot_interval,
+    seq_length,
+    writer,
+):
+    # import code
+    # code.interact(local=dict(globals(), **locals()))
+    # exit(1)
+        
     losses = []
 
     batch_len = len(train_loader)
@@ -100,14 +95,13 @@ def train(model, device, train_loader, epoch, writer=None):
         
         output = model(data, stdp=True)
         loss = torch.nn.functional.nll_loss(output, target)
-        loss.backward()
         step += 1
 
-        if batch_idx % FLAGS.log_interval == 0:
-            logging.info(
+        if batch_idx % log_interval == 0:
+            print(
                 "Train Epoch: {}/{} [{}/{} ({:.0f}%)]\tLoss: {:.6f}".format(
                     epoch,
-                    FLAGS.epochs,
+                    epochs,
                     batch_idx * len(data),
                     len(train_loader.dataset),
                     100.0 * batch_idx / len(train_loader),
@@ -115,7 +109,7 @@ def train(model, device, train_loader, epoch, writer=None):
                 )
             )
 
-        if step % FLAGS.log_interval == 0 and writer:
+        if step % log_interval == 0:
             _, argmax = torch.max(output, 1)
             accuracy = (target == argmax.squeeze()).float().mean()
 
@@ -125,10 +119,21 @@ def train(model, device, train_loader, epoch, writer=None):
             for tag, value in model.named_parameters():
                 tag = tag.replace(".", "/")
                 writer.add_histogram(tag, value.data.cpu().numpy(), step)
-                writer.add_histogram(tag + "/grad", value.grad.data.cpu().numpy(), step)
+                if value.grad is not None:
+                    writer.add_histogram(
+                        tag + "/grad", value.grad.data.cpu().numpy(), step
+                    )
+                    
 
-        if FLAGS.do_plot and batch_idx % FLAGS.plot_interval == 0:
-            ts = np.arange(0, FLAGS.seq_length)
+            avg_dw = 0.0
+            for i, m in enumerate(model.rsnn.children()):
+                if hasattr(m, 'avg_dw'):
+                    avg_dw += m.avg_dw
+            writer.add_scalar("Debug/DW", avg_dw/(i+1), step)
+
+            
+        if do_plot and batch_idx % plot_interval == 0:
+            ts = np.arange(0, seq_length)
             fig, axs = plt.subplots(4, 4, figsize=(15, 10), sharex=True, sharey=True)
             axs = axs.reshape(-1)  # flatten
             for nrn in range(10):
@@ -146,7 +151,7 @@ def train(model, device, train_loader, epoch, writer=None):
     return losses, mean_loss
 
 
-def test(model, device, test_loader, epoch, writer=None):
+def test(model, device, test_loader, epoch, method, writer):
     model.eval()
     test_loss = 0
     correct = 0
@@ -165,13 +170,12 @@ def test(model, device, test_loader, epoch, writer=None):
     test_loss /= len(test_loader.dataset)
 
     accuracy = 100.0 * correct / len(test_loader.dataset)
-    logging.info(
-        f"\nTest set {FLAGS.model}: Average loss: {test_loss:.4f}, \
+    print(
+        f"\nTest set {method}: Average loss: {test_loss:.4f}, \
             Accuracy: {correct}/{len(test_loader.dataset)} ({accuracy:.0f}%)\n"
     )
-    if writer:
-        writer.add_scalar("Loss/test", test_loss, epoch)
-        writer.add_scalar("Accuracy/test", accuracy, epoch)
+    writer.add_scalar("Loss/test", test_loss, epoch)
+    writer.add_scalar("Accuracy/test", accuracy, epoch)
 
     return test_loss, accuracy
 
@@ -195,24 +199,17 @@ def load(path, model):
 
 
 def main(argv):
-    try:
-        from torch.utils.tensorboard import SummaryWriter
 
-        writer = SummaryWriter()
-    except ImportError:
-        writer = None
-
-    torch.manual_seed(FLAGS.random_seed)
-
-    np.random.seed(FLAGS.random_seed)
+    torch.manual_seed(args.random_seed)
+    np.random.seed(args.random_seed)
     if torch.cuda.is_available():
-        torch.cuda.manual_seed(FLAGS.random_seed)
+        torch.cuda.manual_seed(args.random_seed)
         torch.backends.cudnn.enabled = True
         torch.backends.cudnn.benchmark = True
 
-    device = torch.device(FLAGS.device)
+    device = torch.device(args.device)
 
-    kwargs = {"num_workers": 1, "pin_memory": True} if FLAGS.device == "cuda" else {}
+    kwargs = {"num_workers": 1, "pin_memory": True} if args.device == "cuda" else {}
     train_loader = torch.utils.data.DataLoader(
         torchvision.datasets.MNIST(
             root=".",
@@ -227,7 +224,7 @@ def main(argv):
                 ]
             ),
         ),
-        batch_size=FLAGS.batch_size,
+        batch_size=args.batch_size,
         shuffle=True,
         **kwargs,
     )
@@ -242,69 +239,203 @@ def main(argv):
                 ]
             ),
         ),
-        batch_size=FLAGS.batch_size,
+        batch_size=args.batch_size,
         **kwargs,
     )
 
     label = os.environ.get("SLURM_JOB_ID", str(uuid.uuid4()))
-    if FLAGS.prefix:
-        path = f"runs/mnist/{FLAGS.prefix}/{label}"
+    if args.prefix:
+        path = f"runs/mnist_stdp/{args.prefix}"
     else:
-        path = f"runs/mnist/{label}"
+        path = f"runs/mnist_stdp/"
 
     os.makedirs(path, exist_ok=True)
+    
+    try:
+        from torch.utils.tensorboard import SummaryWriter
+
+        writer = SummaryWriter(log_dir=os.path.abspath(path))
+    except ImportError:
+        writer = None
+
     os.chdir(path)
-    FLAGS.append_flags_into_file("flags.txt")
 
     input_features = 28 * 28
 
     model = LIFConvNet(
         input_features,
-        FLAGS.seq_length,
-        model=FLAGS.model,
+        args.seq_length,
+        input_scale=args.input_scale,
+        model=args.method,
+        only_first_spike=args.only_first_spike,
     ).to(device)
+
+    # No gradient required for STDP training
+    model.no_grad()
 
     training_losses = []
     mean_losses = []
     test_losses = []
     accuracies = []
 
-    for epoch in range(FLAGS.epochs):
+    for epoch in range(args.epochs):
         training_loss, mean_loss = train(
-            model, device, train_loader, epoch, writer=writer
+            model,
+            device,
+            train_loader,
+            epoch,
+            clip_grad=args.clip_grad,
+            grad_clip_value=args.grad_clip_value,
+            epochs=args.epochs,
+            log_interval=args.log_interval,
+            do_plot=args.do_plot,
+            plot_interval=args.plot_interval,
+            seq_length=args.seq_length,
+            writer=writer,
         )
-        test_loss, accuracy = test(model, device, test_loader, epoch, writer=writer)
+        # test_loss, accuracy = test(
+        #     model, device, test_loader, epoch, method=args.method, writer=writer
+        # )
 
         training_losses += training_loss
         mean_losses.append(mean_loss)
-        test_losses.append(test_loss)
-        accuracies.append(accuracy)
+        # accuracies.append(accuracy)
 
-        max_accuracy = np.max(np.array(accuracies))
+        # max_accuracy = np.max(np.array(accuracies))
 
-        if (epoch % FLAGS.model_save_interval == 0) and FLAGS.save_model:
+        if (epoch % args.model_save_interval == 0) and args.save_model:
             model_path = f"mnist-{epoch}.pt"
             save(
                 model_path,
                 model=model,
                 epoch=epoch,
-                is_best=accuracy > max_accuracy,
+                is_best=False,
             )
 
     np.save("training_losses.npy", np.array(training_losses))
     np.save("mean_losses.npy", np.array(mean_losses))
-    np.save("test_losses.npy", np.array(test_losses))
     np.save("accuracies.npy", np.array(accuracies))
     model_path = "mnist-final.pt"
     save(
         model_path,
         epoch=epoch,
         model=model,
-        is_best=accuracy > max_accuracy,
+        is_best=True,
     )
-    if writer:
-        writer.close()
 
 
 if __name__ == "__main__":
-    app.run(main)
+    parser = ArgumentParser(
+        "MNIST digit recognition with convolutional SNN. Requires Tensorboard, Matplotlib, and Torchvision"
+    )
+    parser.add_argument(
+        "--only-first-spike",
+        type=bool,
+        default=False,
+        help="Only one spike per input (latency coding).",
+    )
+    parser.add_argument(
+        "--save-grads",
+        type=bool,
+        default=False,
+        help="Save gradients of backward pass.",
+    )
+    parser.add_argument(
+        "--grad-save-interval",
+        type=int,
+        default=10,
+        help="Interval for gradient saving of backward pass.",
+    )
+    parser.add_argument(
+        "--refrac", type=bool, default=False, help="Use refractory time."
+    )
+    parser.add_argument(
+        "--plot-interval", type=int, default=10, help="Interval for plotting."
+    )
+    parser.add_argument(
+        "--input-scale",
+        type=float,
+        default=1.0,
+        help="Scaling factor for input current.",
+    )
+    parser.add_argument(
+        "--find-learning-rate",
+        type=bool,
+        default=False,
+        help="Use learning rate finder to find learning rate.",
+    )
+    parser.add_argument(
+        "--device",
+        type=str,
+        choices=["cpu", "cuda"],
+        default="cpu",
+        help="Device to use by pytorch.",
+    )
+    parser.add_argument(
+        "--epochs", type=int, default=10, help="Number of training episodes to do."
+    )
+    parser.add_argument(
+        "--seq-length", type=int, default=200, help="Number of timesteps to do."
+    )
+    parser.add_argument(
+        "--batch-size",
+        type=int,
+        default=32,
+        help="Number of examples in one minibatch.",
+    )
+    parser.add_argument(
+        "--method",
+        type=str,
+        default="super",
+        choices=["super", "tanh", "circ", "logistic", "circ_dist"],
+        help="Method to use for training.",
+    )
+    parser.add_argument(
+        "--prefix", type=str, default="", help="Prefix to use for saving the results"
+    )
+    parser.add_argument(
+        "--optimizer",
+        type=str,
+        default="adam",
+        choices=["adam", "sgd"],
+        help="Optimizer to use for training.",
+    )
+    parser.add_argument(
+        "--clip-grad",
+        type=bool,
+        default=False,
+        help="Clip gradient during backpropagation",
+    )
+    parser.add_argument(
+        "--grad-clip-value", type=float, default=1.0, help="Gradient to clip at."
+    )
+    parser.add_argument(
+        "--learning-rate", type=float, default=2e-3, help="Learning rate to use."
+    )
+    parser.add_argument(
+        "--log-interval",
+        type=int,
+        default=10,
+        help="In which intervals to display learning progress.",
+    )
+    parser.add_argument(
+        "--model-save-interval",
+        type=int,
+        default=50,
+        help="Save model every so many epochs.",
+    )
+    parser.add_argument(
+        "--save-model", type=bool, default=True, help="Save the model after training."
+    )
+    parser.add_argument("--big-net", type=bool, default=False, help="Use bigger net...")
+    parser.add_argument(
+        "--only-output", type=bool, default=False, help="Train only the last layer..."
+    )
+    parser.add_argument(
+        "--do-plot", type=bool, default=False, help="Do intermediate plots"
+    )
+    parser.add_argument(
+        "--random-seed", type=int, default=1234, help="Random seed to use"
+    )
+    args = parser.parse_args()
+    main(args)

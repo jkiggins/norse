@@ -230,8 +230,8 @@ def main(args):
     )
 
     label = os.environ.get("SLURM_JOB_ID", str(uuid.uuid4()))
-    if FLAGS.prefix:
-        path = f"runs/mnist/{FLAGS.prefix}/{label}"
+    if args.prefix:
+        path = f"runs/mnist/{args.prefix}/{label}"
     else:
         path = f"runs/mnist/{label}"
 

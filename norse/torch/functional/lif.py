@@ -306,6 +306,7 @@ def lif_feed_forward_step(
         p (LIFParameters): parameters of a leaky integrate and fire neuron
         dt (float): Integration timestep to use
     """
+
     jit_params = LIFParametersJIT(
         tau_syn_inv=p.tau_syn_inv,
         tau_mem_inv=p.tau_mem_inv,
@@ -323,6 +324,7 @@ def lif_feed_forward_step(
             v=torch.full_like(input_tensor, jit_params.v_reset),
             i=torch.zeros_like(input_tensor),
         )
+
     return _lif_feed_forward_step_jit(input_tensor, state=state, p=jit_params, dt=dt)
 
 

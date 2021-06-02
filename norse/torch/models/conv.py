@@ -102,6 +102,7 @@ class ConvNet4(torch.nn.Module):
         self.out = LILinearCell(1024, 10)
         self.dtype = dtype
 
+
     def forward(self, x):
         seq_length = x.shape[0]
         batch_size = x.shape[1]
@@ -147,6 +148,7 @@ class ConvNetStdp(torch.nn.Module):
         self.lif2 = LIFCell(p=LIFParameters(method=method, alpha=100.0))
         self.out = LILinearCell(1024, 10)
         self.dtype = dtype
+        self.device = "cpu"
 
         # Setup stdp objects in case forward is called with stdp=true
         self.stdp_conv_params = STDPParameters(
@@ -156,6 +158,7 @@ class ConvNetStdp(torch.nn.Module):
             w_min=-1.0, w_max=1.0,
             convolutional=True
         )
+        self.stdp_conv_params.to(self.device)
 
         self.stdp_lin_params = STDPParameters(
             eta_minus=1e-4,
@@ -163,23 +166,42 @@ class ConvNetStdp(torch.nn.Module):
             hardbound=True,
             w_min=-1.0, w_max=1.0,
         )
-                
-    
-    def jit_init_stdp(self, module, in_x, out_x):
-        if not hasattr(self, "stdp_states"):
-            self.stdp_states = {}
+        self.stdp_lin_params.to(self.device)
 
-        if module in self.stdp_states:
-            return
 
-        state = STDPState(
-            t_pre=torch.zeros(in_x.shape),
-            t_post=torch.zeros(out_x.shape)
-        )
+    def no_grad(self):
+        for param in self.parameters():
+            param.requires_gradient = False
+
+        for m in self.children():
+            if type(m) == LIFCell:
+                m.no_grad()
+
             
-        self.stdp_states[module] = state
+    def to(self, device):
+        super(ConvNetStdp, self).to(device)
 
-        
+        self.device = device
+        self.stdp_conv_params.to(device)
+        self.stdp_lin_params.to(device)
+
+        # Loop over stdp states if they exist, change the device
+        for module in self.children():
+            if hasattr(module, "stdp_state"):
+                module.stdp_state.to(device)
+
+        return self
+
+
+    def jit_init_stdp(self, module, in_x, out_x):
+        if not hasattr(module, "stdp_state"):
+            print("Allocating STDP state for: ", module)
+            module.stdp_state = STDPState(
+                t_pre=torch.zeros(in_x.shape).to(self.device),
+                t_post=torch.zeros(out_x.shape).to(self.device)
+            )
+
+
     def stdp_step(self, module, z_pre, z):
         def _is_conv(obj):
             return type(obj) == torch.nn.Conv2d
@@ -189,32 +211,35 @@ class ConvNetStdp(torch.nn.Module):
 
         self.jit_init_stdp(module, z_pre, z)
 
+        
+        torch.cuda.synchronize()
+        alloc_before = torch.cuda.memory_allocated()
+        
         w = module.weight.detach()
 
-        stdp_state = self.stdp_states[module]
+        stdp_state = module.stdp_state
         if _is_conv(module):
-            w, stdp_state = stdp_step_conv2d(
+            w, stdp_state, dw = stdp_step_conv2d(
                 z_pre, z, w,
                 stdp_state,
                 self.stdp_conv_params,
                 dt=0.001
             )
         elif _is_linear(module):
-            w, stdp_state = stdp_step_linear(
+            w, stdp_state, dw = stdp_step_linear(
                 z_pre, z, w,
                 stdp_state,
                 self.stdp_lin_params,
                 dt=0.001
             )
+            
+        module.weight.data = w
 
-        self.stdp_states[module] = stdp_state
-        module.weights = w
+        if not hasattr(module, 'avg_dw'):
+            module.avg_dw = 0.0
+        module.avg_dw = (module.avg_dw + torch.mean(dw)) / 2
 
-        # import code
-        # code.interact(local=dict(globals(), **locals()))
-        # exit(1)
-
-
+        
     def forward(self, x, stdp=False):
         seq_length = x.shape[0]
         batch_size = x.shape[1]
@@ -228,6 +253,7 @@ class ConvNetStdp(torch.nn.Module):
         voltages = torch.zeros(
             seq_length, batch_size, 10, device=x.device, dtype=self.dtype
         )
+
 
         for ts in range(seq_length):
             z = x[ts, :]
