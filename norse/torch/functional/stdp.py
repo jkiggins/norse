@@ -217,6 +217,10 @@ def stdp_step_linear(
     dw_minus = p_stdp.A_minus(w) * torch.einsum("bi,bj->ij", state_stdp.t_post, z_pre)
 
     dw = dw_plus - dw_minus
+
+    if invert:
+        dw = -dw
+        
     w = w + dw
 
     # Bound checking
@@ -309,7 +313,7 @@ def stdp_step_conv2d(
     return (w, state_stdp, dw)
 
 
-def stdp_step_reward(
+def stdp_step_reward_linear(
     z_pre: torch.Tensor,
     z_post: torch.Tensor,
     w: torch.Tensor,
@@ -320,13 +324,31 @@ def stdp_step_reward(
     dt: float = 0.001,
 ):
 
-    """
-    Step of reward modulated STDP
-
-    If the reward is > 0, perform stdp, scaled by reward. If less than 0,
-    perform anti-stdp, scaled by the reward.
-    """
-
+    invert = False
     if reward < 0:
         reward = -reward
+        invert = True
+
+        
+    if conv:
+        return stdp_step_conv2d(
+            z_pre,
+            z_post,
+            w,
+            state_stdp,
+            p_stdp,
+            dt,
+            invert)
+
+    else:
+        return stdp_step_linear(
+            z_pre,
+            z_post,
+            w,
+            state_stdp,
+            p_stdp,
+            dt,
+            invert)
+
+    
     
