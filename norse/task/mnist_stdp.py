@@ -15,6 +15,7 @@ from torch.utils.tensorboard import SummaryWriter
 import torchvision
 
 from norse.torch.models.conv import ConvNetStdp
+from norse.torch.module.stdp import STDPOptimizer
 from norse.torch.module.encode import ConstantCurrentLIFEncoder
 
 
@@ -26,19 +27,23 @@ class LIFConvNet(torch.nn.Module):
         input_scale,
         model="super",
         only_first_spike=False,
+        optimizer=None,
     ):
         super(LIFConvNet, self).__init__()
         self.constant_current_encoder = ConstantCurrentLIFEncoder(seq_length=seq_length)
         self.only_first_spike = only_first_spike
         self.input_features = input_features
-        self.rsnn = ConvNetStdp(method=model)
+        self.rsnn = ConvNetStdp(method=model, optimizer=optimizer)
         self.seq_length = seq_length
         self.input_scale = input_scale
+        self.optimizer = optimizer
+
 
     def to(self, device):
         super(LIFConvNet, self).to(device)
 
         self.rsnn = self.rsnn.to(device)
+        self.optimizer.to(device)
 
         return self
 
@@ -48,9 +53,9 @@ class LIFConvNet(torch.nn.Module):
             p.requires_grad = False
 
         self.rsnn.no_grad()
-    
 
-    def forward(self, x, stdp=True):
+
+    def forward(self, x, optimize=True):
         batch_size = x.shape[0]
 
         # Add time dimension using some encoder
@@ -59,15 +64,16 @@ class LIFConvNet(torch.nn.Module):
         )
 
         x = x.reshape(self.seq_length, batch_size, 1, 28, 28)
-        voltages = self.rsnn(x, stdp=stdp)
+        voltages = self.rsnn(x, optimize=optimize)
         m, _ = torch.max(voltages, 0)
-        log_p_y = torch.nn.functional.log_softmax(m, dim=1)\
+        log_p_y = torch.nn.functional.log_softmax(m, dim=1)
             
         return log_p_y
 
 
 def train(
     model,
+    optimizer,
     device,
     train_loader,
     epoch,
@@ -93,8 +99,11 @@ def train(
         data, target = data.to(device), target.to(device)
         # data is "normal" here, no time dimension
         
-        output = model(data, stdp=True)
+        output = model(data)
         loss = torch.nn.functional.nll_loss(output, target)
+
+        optimizer.step()
+        
         step += 1
 
         if batch_idx % log_interval == 0:
@@ -262,12 +271,15 @@ def main(argv):
 
     input_features = 28 * 28
 
+    optimizer = STDPOptimizer()
+
     model = LIFConvNet(
         input_features,
         args.seq_length,
         input_scale=args.input_scale,
         model=args.method,
         only_first_spike=args.only_first_spike,
+        optimizer=optimizer
     ).to(device)
 
     # No gradient required for STDP training
@@ -281,6 +293,7 @@ def main(argv):
     for epoch in range(args.epochs):
         training_loss, mean_loss = train(
             model,
+            optimizer,
             device,
             train_loader,
             epoch,
@@ -396,8 +409,8 @@ if __name__ == "__main__":
     parser.add_argument(
         "--optimizer",
         type=str,
-        default="adam",
-        choices=["adam", "sgd"],
+        default="stdp",
+        choices=["stdp", "rstdp"],
         help="Optimizer to use for training.",
     )
     parser.add_argument(
