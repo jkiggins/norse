@@ -3,7 +3,6 @@ import torch
 from norse.torch.module.lif import LIFCell
 from norse.torch.functional.stdp import stdp_step_linear, stdp_step_conv2d, STDPState, STDPParameters
 
-
 class STDPOptimizer:
     def __init__(self):
         # Setup stdp objects in case forward is called with stdp=true

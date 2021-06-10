@@ -54,6 +54,7 @@ class LIFConvNet(torch.nn.Module):
         x = x.reshape(self.seq_length, batch_size, 1, 28, 28)
         voltages = self.rsnn(x)
         m, _ = torch.max(voltages, 0)
+        
         log_p_y = torch.nn.functional.log_softmax(m, dim=1)
         return log_p_y
 
@@ -83,6 +84,7 @@ def train(
         data, target = data.to(device), target.to(device)
         optimizer.zero_grad()
         output = model(data)
+
         loss = torch.nn.functional.nll_loss(output, target)
         loss.backward()
 
@@ -245,7 +247,6 @@ def main(args):
         writer = None
 
     os.chdir(path)
-    FLAGS.append_flags_into_file("flags.txt")
 
     input_features = 28 * 28
 

@@ -349,6 +349,3 @@ def stdp_step_reward_linear(
             p_stdp,
             dt,
             invert)
-
-    
-    

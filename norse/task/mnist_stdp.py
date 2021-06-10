@@ -99,11 +99,17 @@ def train(
         data, target = data.to(device), target.to(device)
         # data is "normal" here, no time dimension
         
-        output = model(data)
-        loss = torch.nn.functional.nll_loss(output, target)
+        output = model(data).detach()
+        output_classes = torch.argmax(output, axis=1)
 
-        optimizer.step()
+        loss = torch.nn.functional.nll_loss(output, target)
         
+        num_correct = torch.sum(output_classes == target)
+        accuracy = num_correct / len(output_classes)
+
+        vote = ((accuracy > 0.5) * 2) - 1
+        optimizer.step_reward(vote)
+
         step += 1
 
         if batch_idx % log_interval == 0:
