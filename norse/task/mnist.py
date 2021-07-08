@@ -59,6 +59,26 @@ class LIFConvNet(torch.nn.Module):
         return log_p_y
 
 
+def _get_flat_params(model):
+    params = []
+    for param in model.parameters():
+        params.append(param.data.clone())
+
+
+    return params
+
+
+def _get_param_avg_dw(params1, params2):
+    dws = []
+    for p1, p2 in zip(params1, params2):
+        diff = torch.abs(p1 - p2)
+        where_diff = diff > 1e-9
+
+        dws.append(abs(torch.sum(diff[where_diff])/torch.sum(where_diff)))
+
+    return sum(dws)/len(dws)
+
+
 def train(
     model,
     device,
@@ -83,6 +103,9 @@ def train(
     for batch_idx, (data, target) in enumerate(train_loader):
         data, target = data.to(device), target.to(device)
         optimizer.zero_grad()
+
+        params_before = _get_flat_params(model)
+        
         output = model(data)
 
         loss = torch.nn.functional.nll_loss(output, target)
@@ -92,6 +115,10 @@ def train(
             torch.nn.utils.clip_grad_norm_(model.parameters(), grad_clip_value)
 
         optimizer.step()
+
+        params_after = _get_flat_params(model)
+        dw = _get_param_avg_dw(params_before, params_after)
+        
         step += 1
 
         if batch_idx % log_interval == 0:

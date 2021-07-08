@@ -7,16 +7,16 @@ class STDPOptimizer:
     def __init__(self):
         # Setup stdp objects in case forward is called with stdp=true
         self.stdp_conv_params = STDPParameters(
-            eta_minus=1e-4,
-            eta_plus=1e-4,
+            eta_minus=1e-3,
+            eta_plus=1e-3,
             hardbound=True,
             w_min=-1.0, w_max=1.0,
             convolutional=True
         )
 
         self.stdp_lin_params = STDPParameters(
-            eta_minus=1e-4,
-            eta_plus=1e-4,
+            eta_minus=1e-3,
+            eta_plus=1e-3,
             hardbound=True,
             w_min=-1.0, w_max=1.0,
         )
@@ -83,16 +83,18 @@ class STDPOptimizer:
             
         module.weight.data = w
 
-        if not hasattr(module, 'avg_dw'):
-            module.avg_dw = 0.0
-        module.avg_dw = (module.avg_dw + torch.mean(dw)) / 2
-
+        return dw
+    
 
     def step(self):
+        dw_arr = []
         for step in self.stdp_steps:
-            self._stdp_step(*step)
+            dw = self._stdp_step(*step)
+            dw_arr.append(dw.mean())
 
         self.stdp_steps = []
+
+        return torch.Tensor(dw_arr)
 
 
     def step_reward(self, reward):
@@ -101,3 +103,60 @@ class STDPOptimizer:
                 self._stdp_step(*step, reward=reward)
 
         self.stdp_steps = []
+
+
+def inspect(algo="additive", steps=100):
+    n_batches = 1
+    n_pre = 1
+    n_post = 1
+    dt = 0.001
+    mu = 0.0
+    n_sweep = steps
+
+    w = torch.Tensor([1.0]).view(1,1)
+    
+    p_stdp = STDPParameters(
+        eta_minus=1e-1,
+        eta_plus=3e-1,  # Best to check with large, asymmetric learning-rates
+        stdp_algorithm=algo,
+        mu=mu,
+        hardbound=False,
+        convolutional=False,
+    )
+
+    dw_arr = []
+    dt_arr = []
+    
+    for i in range(n_sweep):
+        spike_times = [i, n_sweep//2]
+        start = min(spike_times)
+        stop = max(spike_times)
+
+        # Reset the state for reach run
+        state_stdp = STDPState(
+            t_pre=torch.zeros(n_batches, n_pre),
+            t_post=torch.zeros(n_batches, n_post),
+        )
+
+        dt_arr.append((spike_times[1] - spike_times[0]) * dt)
+
+        for t in range(start, stop+1):
+            z_pre = torch.Tensor([t == spike_times[0]]).view(1,1)
+            z_post = torch.Tensor([t == spike_times[1]]).view(1,1)
+            
+            w, state_stdp, dw = stdp_step_linear(
+                z_pre,
+                z_post,
+                w,
+                state_stdp,
+                p_stdp,
+                dt=dt,
+            )
+
+            if t != stop:
+                assert dw < 1e-3
+
+        dw_arr.append(dw)
+
+    return torch.Tensor(dt_arr), torch.Tensor(dw_arr)
+                

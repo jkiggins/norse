@@ -11,12 +11,12 @@ import matplotlib.pyplot as plt
 
 import torch
 import torch.utils.data
-from torch.utils.tensorboard import SummaryWriter
 import torchvision
 
 from norse.torch.models.conv import ConvNetStdp
 from norse.torch.module.stdp import STDPOptimizer
 from norse.torch.module.encode import ConstantCurrentLIFEncoder
+from norse.eval import logger
 
 
 class LIFConvNet(torch.nn.Module):
@@ -102,7 +102,7 @@ def train(
         output = model(data).detach()
         output_classes = torch.argmax(output, axis=1)
 
-        loss = torch.nn.functional.nll_loss(output, target)
+        dw_arr = optimizer.step()
         
         num_correct = torch.sum(output_classes == target)
         accuracy = num_correct / len(output_classes)
@@ -123,6 +123,11 @@ def train(
                     loss.item(),
                 )
             )
+
+            trace_logger = logger.TraceLogger()
+            trace_logger.set_trace("dw", dw_arr)
+
+            trace_logger.log_traces()
 
         if step % log_interval == 0:
             _, argmax = torch.max(output, 1)
@@ -164,35 +169,6 @@ def train(
 
     mean_loss = np.mean(losses)
     return losses, mean_loss
-
-
-def test(model, device, test_loader, epoch, method, writer):
-    model.eval()
-    test_loss = 0
-    correct = 0
-    with torch.no_grad():
-        for data, target in test_loader:
-            data, target = data.to(device), target.to(device)
-            output = model(data)
-            test_loss += torch.nn.functional.nll_loss(
-                output, target, reduction="sum"
-            ).item()  # sum up batch loss
-            pred = output.argmax(
-                dim=1, keepdim=True
-            )  # get the index of the max log-probability
-            correct += pred.eq(target.view_as(pred)).sum().item()
-
-    test_loss /= len(test_loader.dataset)
-
-    accuracy = 100.0 * correct / len(test_loader.dataset)
-    print(
-        f"\nTest set {method}: Average loss: {test_loss:.4f}, \
-            Accuracy: {correct}/{len(test_loader.dataset)} ({accuracy:.0f}%)\n"
-    )
-    writer.add_scalar("Loss/test", test_loss, epoch)
-    writer.add_scalar("Accuracy/test", accuracy, epoch)
-
-    return test_loss, accuracy
 
 
 def save(path, epoch, model, is_best=False):
@@ -265,13 +241,8 @@ def main(argv):
         path = f"runs/mnist_stdp/"
 
     os.makedirs(path, exist_ok=True)
-    
-    try:
-        from torch.utils.tensorboard import SummaryWriter
 
-        writer = SummaryWriter(log_dir=os.path.abspath(path))
-    except ImportError:
-        writer = None
+    logger.set_path(path)
 
     os.chdir(path)
 
@@ -310,7 +281,7 @@ def main(argv):
             do_plot=args.do_plot,
             plot_interval=args.plot_interval,
             seq_length=args.seq_length,
-            writer=writer,
+            writer=logger.writer(),
         )
         # test_loss, accuracy = test(
         #     model, device, test_loader, epoch, method=args.method, writer=writer

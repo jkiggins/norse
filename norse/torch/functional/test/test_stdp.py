@@ -88,7 +88,7 @@ def test_linear_stdp_stepper(initialise_for_linear_stdp):
     t_post = 0.0
     for n_t in range(n_time):
         w0 = w
-        w, state_stdp = stdp_step_linear(
+        w, state_stdp, _ = stdp_step_linear(
             z_pre[n_t],
             z_post[n_t],
             w,
@@ -216,7 +216,7 @@ def test_conv2d_stdp_stepper(initialise_for_conv2d_stdp):
     t_post = 0.0
     for n_t in range(n_time):
         w0 = w
-        w, state_stdp = stdp_step_conv2d(
+        w, state_stdp, _ = stdp_step_conv2d(
             z_pre[n_t],
             z_post[n_t],
             w,
