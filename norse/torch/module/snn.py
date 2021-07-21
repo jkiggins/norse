@@ -51,9 +51,6 @@ class SNNCell(torch.nn.Module):
     def extra_repr(self) -> str:
         return f"p={self.p}, dt={self.dt}"
 
-    def no_grad(self):
-        self.requires_grad = False
-
     def _forward(self, input_tensor: torch.Tensor, state: Optional[Any] = None):
         state = state if state is not None else self.state_fallback(input_tensor)
 
@@ -61,10 +58,6 @@ class SNNCell(torch.nn.Module):
 
     
     def forward(self, input_tensor: torch.Tensor, state: Optional[Any] = None):
-        if not self.requires_grad:
-            with torch.no_grad():
-                return self._forward(input_tensor, state)
-
         return self._forward(input_tensor, state)
         
             

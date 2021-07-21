@@ -4,24 +4,29 @@ from norse.torch.module.lif import LIFCell
 from norse.torch.functional.stdp import stdp_step_linear, stdp_step_conv2d, STDPState, STDPParameters
 
 class STDPOptimizer:
-    def __init__(self):
+    def __init__(self, alpha=(1e-3, 1e-3), monitor=None):
         # Setup stdp objects in case forward is called with stdp=true
+        if type(alpha) == float:
+            alpha = (alpha, alpha)
+            
         self.stdp_conv_params = STDPParameters(
-            eta_minus=1e-3,
-            eta_plus=1e-3,
+            eta_minus=alpha[0],
+            eta_plus=alpha[1],
             hardbound=True,
             w_min=-1.0, w_max=1.0,
             convolutional=True
         )
 
         self.stdp_lin_params = STDPParameters(
-            eta_minus=1e-3,
-            eta_plus=1e-3,
+            eta_minus=alpha[0],
+            eta_plus=alpha[1],
             hardbound=True,
             w_min=-1.0, w_max=1.0,
         )
 
         self.stdp_steps = []
+
+        self.monitor = monitor
 
 
     def to(self, device):
@@ -38,11 +43,11 @@ class STDPOptimizer:
             )
 
 
-    def __call__(self, module, z_pre, z):
-        self.stdp_steps.append((module, z_pre, z))
+    def __call__(self, module, z_pre, z, name=None):
+        self.stdp_steps.append((module, z_pre, z, name))
 
 
-    def _stdp_step(self, module, z_pre, z, reward=None):                      
+    def _stdp_step(self, module, z_pre, z, name, reward=None):                      
         def _is_conv(obj):
             return type(obj) == torch.nn.Conv2d
     
@@ -76,6 +81,10 @@ class STDPOptimizer:
                 self.stdp_lin_params,
                 dt=0.001
             )
+
+        if self.monitor:
+            assert not torch.any(torch.isnan(dw))
+            self.monitor(module, z_pre, z, w, dw, name=name)
 
         # If there is a reward, apply it with dw
         if not (reward is None):

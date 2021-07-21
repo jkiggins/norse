@@ -15,6 +15,68 @@ def writer():
     return _writer_
 
 
+def _iter_count(dict, name):
+        if not(name in dict):
+            dict[name] = 0
+        dict[name] += 1
+
+        return dict[name] - 1
+
+
+class SpikeMonitor:
+    def __init__(self, weight_hist_iter=None):
+        self.iter_dict = {}
+        self.weight_hist_iter = weight_hist_iter
+        
+    def reset():
+        self.iter_dict = {}
+
+    def iter_scalar(self, name, scalar):
+        index = _iter_count(self.iter_dict, name)
+        writer().add_scalar(name, scalar, index)
+
+    def iter_weights(self, name, weights):
+        index = _iter_count(self.iter_dict, name)
+
+        if index % self.weight_hist_iter == 0:
+            writer().add_histogram(name, weights.squeeze(), index // self.weight_hist_iter) 
+            
+        
+    def __call__(self, pre, lif_state, weight_module, spiking_module, post, pre_is_input=False, name=None):
+        avg_spikes = post.mean()
+
+        if lif_state:
+            avg_membrane_voltage = lif_state.v.mean()
+        else:
+            avg_membrane_voltage = 0.0
+
+        name = "{}_spike_activity".format(name)
+        self.iter_scalar(name, avg_spikes)
+
+        name = "{}_membrane_voltage".format(name)
+        self.iter_scalar(name, avg_membrane_voltage)
+
+        name = "{}_hist".format(name)
+        self.iter_weights(name, weight_module.weight.data)
+
+        if pre_is_input:
+            name = "input_spike_activity"
+            self.iter_scalar(name, pre.mean())
+
+
+
+class STDPMonitor:
+    def __init__(self):
+        self.iter_dict = {}
+        
+    def __call__(self, module, pre, post, w, dw, name=None):
+        avg_dw = dw.mean()
+
+        name = "{}_dw".format(name)
+        index = _iter_count(self.iter_dict, name)
+        writer().add_scalar(name, avg_dw, index)
+
+
 class TraceLogger:
     def __init__(self):
         self.traces = {}

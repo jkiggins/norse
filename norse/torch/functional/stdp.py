@@ -212,9 +212,28 @@ def stdp_step_linear(
     This assumes full connection between neurons reprsented by t_pre/z_post. It also sums
     the weight updates along the batch dimension.
 
-    # """
-    dw_plus = p_stdp.A_plus(w) * torch.einsum("bi,bj->ij", z_post, state_stdp.t_pre)
-    dw_minus = p_stdp.A_minus(w) * torch.einsum("bi,bj->ij", state_stdp.t_post, z_pre)
+    einsum notation can be confusing, see: https://rockt.github.io/2018/04/30/einsum
+
+    In this case b is batch, and its presence just means we are summing the stdp updates across
+    batches. Ignoring that for now, the einsum for batch_size=1 would be
+    i,j->ij or C_ij = A_i*B_j.
+    if A = [a0, a1, ..., an] and B = [a0, a1, ..., an]
+    C = [[a0*b0 a0*b1 ... a0*bn],
+         [a1*b0 a1*b1 ... a1*bn
+    and so on.
+
+    """
+    tensors_in_use = [z_post, state_stdp.t_pre, z_pre, state_stdp.t_post]
+    tensor_has_batch = [len(t.shape) > 1 for t in tensors_in_use]
+    
+    if all(tensor_has_batch):
+        dw_plus = p_stdp.A_plus(w) * torch.einsum("bi,bj->ij", z_post, state_stdp.t_pre)
+        dw_minus = p_stdp.A_minus(w) * torch.einsum("bi,bj->ij", state_stdp.t_post, z_pre)
+    elif any(tensor_has_batch):
+        raise ValueError("Some tensors have a batch dimension while others don't")
+    else:
+        dw_plus = p_stdp.A_plus(w) * torch.einsum("i,j->ij", z_post, state_stdp.t_pre)
+        dw_minus = p_stdp.A_minus(w) * torch.einsum("i,j->ij", state_stdp.t_post, z_pre)
 
     dw = dw_plus - dw_minus
 

@@ -32,6 +32,7 @@ from typing import NamedTuple, Optional, Tuple
 import torch
 import torch.jit
 from norse.torch.functional.threshold import threshold
+from pprint import pprint
 
 
 class LIFParameters(NamedTuple):
@@ -135,6 +136,7 @@ def _lif_step_jit(
 ) -> Tuple[torch.Tensor, LIFState]:  # pragma: no cover
     # compute voltage updates
     dv = dt * p.tau_mem_inv * ((p.v_leak - state.v) + state.i)
+
     v_decayed = state.v + dv
 
     # compute current updates
@@ -242,7 +244,7 @@ def lif_step(
     )
 
 
-@torch.jit.script
+# @torch.jit.script
 def _lif_feed_forward_step_jit(
     input_tensor: torch.Tensor,
     state: LIFFeedForwardState,
