@@ -3,9 +3,7 @@ Utilities for plotting spikes in layers over time in 2D and 3D.
 """
 
 from typing import List, Optional
-
 import matplotlib.pyplot as plt
-
 import torch
 
 
@@ -54,7 +52,7 @@ def plot_heatmap_2d(
     kwargs["aspect"] = kwargs.get("aspect", "auto")
     kwargs["interpolation"] = kwargs.get("interpolation", "none")
 
-    pos = plt.imshow(_detach_tensor(data).T, **kwargs)
+    pos = ax.imshow(_detach_tensor(data).T, **kwargs)
     if show_colorbar:
         ax.colorbar(pos, ax=ax)
     return ax

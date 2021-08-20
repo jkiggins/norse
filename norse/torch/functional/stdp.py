@@ -12,12 +12,14 @@ class STDPState:
         t_post (torch.Tensor): postsynaptic spike trace
     """
 
-    def __init__(self, t_pre: torch.Tensor, t_post: torch.Tensor):
+    def __init__(self, t_pre: torch.Tensor, t_post: torch.Tensor, decay_fn=None):
         self.t_pre = t_pre
         self.t_post = t_post
 
         self.t_pre.requires_grad = False
         self.t_post.requires_grad = False
+
+        self.decay_fn = {'recent': self.decay_recent, 'global': self.decay_global}[decay_fn]
 
         
     def to(self, device):
@@ -25,9 +27,16 @@ class STDPState:
         self.t_post.to(device)
 
         return self
+
+    
+    def decay(self, *args, **kwargs):
+        if not (self.decay_fn in [self.decay_global, self.decay_recent]):
+            raise ValueError("Decay Function must be member of STDPState")
+
+        self.decay_fn(*args, **kwargs)
         
 
-    def decay(
+    def decay_global(
         self,
         z_pre: torch.Tensor,
         z_post: torch.Tensor,
@@ -59,10 +68,34 @@ class STDPState:
             dt * tau_post_inv * (-self.t_post + a_post * z_post)
         )
 
-        # import code
-        # code.interact(local=dict(globals(), **locals()))
-        # exit(1)
+
+    def decay_recent(
+        self,
+        z_pre: torch.Tensor,
+        z_post: torch.Tensor,
+        tau_pre_inv: torch.Tensor,
+        tau_post_inv: torch.Tensor,
+        a_pre: torch.Tensor,
+        a_post: torch.Tensor,
+        dt: float = 0.001,
+    ):
+        """Decay function for STDP traces.
+        Parameters:
+            z_pre (torch.Tensor): presynaptic spikes
+            z_post (torch.Tensor): postsynaptic spikes
+            tau_pre_inv (torch.Tensor): inverse time-constant for the presynaptic trace
+            tau_post (torch.Tensor): inverse time-constant for the postsynaptic trace
+            a_pre (torch.Tensor): presynaptic trace
+            a_post (torch.Tensor): postsynaptic trace
+            dt (float): time-resolution
+        """
+        self.t_pre = self.t_pre + (dt * tau_pre_inv * (-self.t_pre))
+        self.t_pre[z_pre == 1] = a_pre
+            
+        self.t_post = self.t_post + (dt * tau_post_inv * (-self.t_post))
+        self.t_post[z_post == 1] = a_post
         
+
 
 class STDPParameters:
     """STDP parameters.
@@ -165,10 +198,6 @@ class STDPParameters:
         self.a_post = self.a_post.to(device)
         self.tau_pre_inv = self.tau_pre_inv.to(device)
         self.tau_post_inv = self.tau_post_inv.to(device)
-        # self.w_min.to(device)
-        # self.w_max.to(device)
-        # self.eta_plus.to(device)
-        # self.eta_minus.to(device)
         self.mu = self.mu.to(device)
 
         return self
@@ -180,8 +209,8 @@ def stdp_step_linear(
     w: torch.Tensor,
     state_stdp: STDPState,
     p_stdp: STDPParameters = STDPParameters(),
+    reward = 1.0,
     dt: float = 0.001,
-    invert: bool = False,
 ) -> Tuple[torch.Tensor, STDPState]:
     """STDP step for a FF LIF layer.
     Input:
@@ -225,6 +254,7 @@ def stdp_step_linear(
     """
     tensors_in_use = [z_post, state_stdp.t_pre, z_pre, state_stdp.t_post]
     tensor_has_batch = [len(t.shape) > 1 for t in tensors_in_use]
+
     
     if all(tensor_has_batch):
         dw_plus = p_stdp.A_plus(w) * torch.einsum("bi,bj->ij", z_post, state_stdp.t_pre)
@@ -235,11 +265,12 @@ def stdp_step_linear(
         dw_plus = p_stdp.A_plus(w) * torch.einsum("i,j->ij", z_post, state_stdp.t_pre)
         dw_minus = p_stdp.A_minus(w) * torch.einsum("i,j->ij", state_stdp.t_post, z_pre)
 
-    dw = dw_plus - dw_minus
 
-    if invert:
-        dw = -dw
-        
+    # If both spike at the same time, there is no weight update
+    dw_valid = torch.logical_or(torch.isclose(dw_plus, torch.Tensor([0.0])), torch.isclose(dw_minus, torch.Tensor([0.0])))
+
+    dw = (dw_plus - dw_minus) * dw_valid * reward
+
     w = w + dw
 
     # Bound checking
@@ -368,3 +399,47 @@ def stdp_step_reward_linear(
             p_stdp,
             dt,
             invert)
+
+
+def stdp_step_global(
+    z_pre: torch.Tensor,
+    z_post: torch.Tensor,
+    w: torch.Tensor,
+    w_map,
+    state_stdp: STDPState,
+    p_stdp: STDPParameters = STDPParameters(),
+    dt: float = 0.001,
+) -> Tuple[torch.Tensor, STDPState]:
+    """STDP step for a layer of any shape, windowed approach
+    Input:
+        z_pre (torch.Tensor): Presynaptic activity z: {0,1} -> {no spike, spike}
+        z_post (torch.Tensor): Postsynaptic activity z: {0,1} -> {no spike, spike}
+        w (torch.Tensor): Weight tensor connecting the pre- and postsynaptic layers
+        state_stdp (STDPState): STDP state
+        p_stdp (STDPParameters): Parameters of STDP
+        dt (float): Time-resolution
+    Output:
+        w (torch.tensor): Updated synaptic weights
+        state_stdp (STDPState): Updated STDP state
+    """
+    
+    # Update STDP traces
+    state_stdp.decay_recent(
+        z_pre,
+        z_post,
+        p_stdp.tau_pre_inv,
+        p_stdp.tau_post_inv,
+        p_stdp.a_pre,
+        p_stdp.a_post,
+        dt,
+    )
+
+    dw = stdp_state.t_pre * output
+
+    
+    w = w + dw
+
+    # Bound checking
+    w = p_stdp.bounding_func(w)
+
+    return (w, state_stdp, dw)

@@ -4,19 +4,19 @@ from norse.torch.module.lif import LIFCell
 from norse.torch.functional.stdp import stdp_step_linear, stdp_step_conv2d, STDPState, STDPParameters
 
 class STDPOptimizer:
-    def __init__(self, alpha=(1e-3, 1e-3), monitor=None):
+    def __init__(self, alpha=(1e-3, 1e-3), monitor=None, decay_fn=None, dt=0.001):
+        
         # Setup stdp objects in case forward is called with stdp=true
         if type(alpha) == float:
             alpha = (alpha, alpha)
-            
+
         self.stdp_conv_params = STDPParameters(
             eta_minus=alpha[0],
             eta_plus=alpha[1],
             hardbound=True,
             w_min=-1.0, w_max=1.0,
-            convolutional=True
+            convolutional=True,
         )
-
         self.stdp_lin_params = STDPParameters(
             eta_minus=alpha[0],
             eta_plus=alpha[1],
@@ -24,94 +24,93 @@ class STDPOptimizer:
             w_min=-1.0, w_max=1.0,
         )
 
-        self.stdp_steps = []
+        self.decay_fn = decay_fn
 
+        self.stdp_steps = []
+        self._stdp_states = {}
         self.monitor = monitor
+
+        self.dt = dt
 
 
     def to(self, device):
         self.stdp_conv_params.to(device)
         self.stdp_lin_params.to(device)
 
+        
+    def reset_state(self):
+        print("Stdp Reset State")
+        for k in self._stdp_states:
+            self._stdp_states[k] = None
+        
 
     def init_stdp(self, module, in_x, out_x):
-        if not hasattr(module, "stdp_state"):
-            print("Allocating STDP state for: ", module)
-            module.stdp_state = STDPState(
+        if (not (module in self._stdp_states)) or (self._stdp_states[module] is None):
+            print("New Stdp State for: ", module)
+            self._stdp_states[module] = STDPState(
                 t_pre=torch.zeros(in_x.shape).to(in_x.device),
-                t_post=torch.zeros(out_x.shape).to(in_x.device)
+                t_post=torch.zeros(out_x.shape).to(in_x.device),
+                decay_fn=self.decay_fn
             )
+        else:
+            print("Stdp state found for: ", module)
 
+            
+    def _get_state(self, module):
+        return self._stdp_states[module]
 
     def __call__(self, module, z_pre, z, name=None):
         self.stdp_steps.append((module, z_pre, z, name))
 
 
-    def _stdp_step(self, module, z_pre, z, name, reward=None):                      
-        def _is_conv(obj):
-            return type(obj) == torch.nn.Conv2d
+    def _stdp_step(self, module, z_pre, z, name, reward=1.0, dt=0.001):
+        def _is_conv(module):
+            return type(module) == torch.nn.Conv2d
     
-        def _is_linear(obj):
-            return type(obj) == torch.nn.Linear
+        def _is_linear(module):
+            return type(module) == torch.nn.Linear
 
         self.init_stdp(module, z_pre, z)
         
-        alloc_before = torch.cuda.memory_allocated()
-        
-        w0 = module.weight.detach()
+        w = module.weight.detach()
 
-        # if reward is none, let stdp_step_* modify the weights, otherwise no
-        if reward is None:
-            w = w0
-        else:
-            w = torch.zeros_like(w0)
-
-        stdp_state = module.stdp_state
+        stdp_state = self._get_state(module)
         if _is_conv(module):
             w, stdp_state, dw = stdp_step_conv2d(
                 z_pre, z, w,
                 stdp_state,
                 self.stdp_conv_params,
-                dt=0.001
+                dt=dt,
             )
         elif _is_linear(module):
             w, stdp_state, dw = stdp_step_linear(
                 z_pre, z, w,
                 stdp_state,
                 self.stdp_lin_params,
-                dt=0.001
+                reward=reward,
+                dt=dt,
             )
 
+        assert not torch.any(torch.isnan(dw))
+        
         if self.monitor:
-            assert not torch.any(torch.isnan(dw))
             self.monitor(module, z_pre, z, w, dw, name=name)
 
-        # If there is a reward, apply it with dw
-        if not (reward is None):
-            w = w0 + (dw * reward)
-            
         module.weight.data = w
 
         return dw
     
 
-    def step(self):
+    def step(self, reward=1.0):
+        print("Stdp Step: ", len(self.stdp_steps))
         dw_arr = []
         for step in self.stdp_steps:
-            dw = self._stdp_step(*step)
+            dw = self._stdp_step(*step, reward=reward)
             dw_arr.append(dw.mean())
 
         self.stdp_steps = []
 
         return torch.Tensor(dw_arr)
-
-
-    def step_reward(self, reward):
-        with torch.no_grad():
-            for step in self.stdp_steps:
-                self._stdp_step(*step, reward=reward)
-
-        self.stdp_steps = []
 
 
 def inspect(algo="additive", steps=100):

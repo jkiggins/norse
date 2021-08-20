@@ -6,7 +6,7 @@ from norse.torch.module.lif import LIFCell
 
 from norse.torch.functional.stdp import stdp_step_linear, stdp_step_conv2d, STDPState, STDPParameters
 
-from norse.eval import logger, inspect
+from norse.eval import logger
 
 
 class ConvNet(torch.nn.Module):

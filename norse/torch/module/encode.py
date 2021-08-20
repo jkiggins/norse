@@ -195,6 +195,6 @@ class SpikeLatencyEncoder(torch.nn.Module):
         tensor([[0, 1, 1],
                 [1, 0, 0]])
     """
-
+    
     def forward(self, input_spikes):
         return encode.spike_latency_encode(input_spikes)
