@@ -105,24 +105,21 @@ class PatternNet(torch.nn.Module):
         return z
 
 
-def _gen_spikes(pattern, features):
-    def _get_constant(val, samples):
+def _gen_spikes(*pattern):
+    def _get_constant(val, samples, features):
         return torch.ones(samples, features).type(torch.float)*1.0
 
-    def _get_poisson(scale, samples):
+    def _get_poisson(scale, samples, features):
         return torch.poisson(torch.rand((samples, features))*scale).type(torch.float)
 
-    def _get_uniform_binary(th, samples):
+    def _get_uniform_binary(th, samples, features):
         print("Uniform binary < {}, {} samples".format(th, samples))
         return (torch.rand(samples, features) < th)*1.0
 
-    def _get_onehot(index):
-        spikes = torch.zeros(features) * False
-        spikes[index] = True
+    def _get_onehot(features):
+        spikes = torch.eye(features)
 
-        return spikes.view(1, -1)
-    
-        
+        return spikes
 
     pattern_fn_dict = {
         'constant': _get_constant,
@@ -131,7 +128,11 @@ def _gen_spikes(pattern, features):
         'onehot': _get_onehot,
     }
 
-    return pattern_fn_dict[pattern[0]](*pattern[1:])
+    arg_list = ()
+    if len(pattern) >= 2:
+        arg_list = pattern[1:]
+
+    return pattern_fn_dict[pattern[0]](*arg_list)
 
 
 def _spikes_from_cfg(cfg):
@@ -201,6 +202,7 @@ def _train(model, cfg, inputs, targets, optim, repeat=10):
             model.reset_state()
             optim.reset_state()
             for j in range(repeat):
+                
                 z = model(spike_vector, optimize=cfg['train']['optimize'])
                 z = model(torch.zeros_like(spike_vector), optimize=cfg['train']['optimize'])
                 reward = ((z == targets[i])*1.0 - 0.5)*2.0
@@ -223,14 +225,11 @@ def _main():
     
     spike_monitor = logger.SpikeMonitor(weight_hist_iter=args.iters // 10)
 
-    input_features = 2
+    input_features = 10
     v_reset = -0.3
     v_th = 0.3
     
     cfg = {
-        'input': {
-            'patterns': [('onehot', 0), ('onehot', 1)]
-        },
         'input_features': input_features,
         'lif': {'method': 'super', 'v_reset': v_reset, 'v_th': v_th},
         'layers': [
@@ -241,11 +240,15 @@ def _main():
         'train': {'optimize': True, 'epochs': 5}
     }
 
-    target_patterns, luer = _spikes_from_cfg(cfg)
-    
-    spike_set = torch.vstack((target_patterns, luer))
-    targets = torch.cat((torch.ones(target_patterns.shape[0:1]), torch.zeros(luer.shape[0:1])))
+    spike_set = _gen_spikes('onehot', input_features)
 
+    # pick a random number of iters to be associated with a 1, then pick those random inputs
+    targets = torch.zeros((spike_set.shape[0]))
+    target_iters = torch.randint(targets.shape[0] // 2, (1,)).tolist()[0] + 1
+    
+    for i in range(target_iters):
+        targets[torch.randint(targets.shape[0], (1,))] = 1
+        
     stdp_monitor = logger.STDPMonitor()
     stdp_optimizer = STDPOptimizer(alpha=1e-1, decay_fn='recent', monitor=stdp_monitor)
 
@@ -253,7 +256,7 @@ def _main():
     model.add_monitor(spike_monitor)
     
     _train(model, cfg, spike_set, targets, stdp_optimizer, repeat=1)
-        
+
 
 if __name__ == '__main__':
     path = './runs/pattern'
