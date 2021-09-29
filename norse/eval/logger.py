@@ -5,6 +5,7 @@ import torch
 from torch.utils.tensorboard import SummaryWriter
 
 from norse.torch.utils import plot as nplot
+from matplotlib import pyplot as plt
 
 
 _writer_ = None
@@ -153,6 +154,48 @@ class STDPMonitor:
                 writer().add_scalar(iter_name, dw[i,j], index)
 
 
+
+class NeuroMonitor:
+    def __init__(self):
+        self.traces = {}
+        self._figure = plt.Figure()
+        self.ax_index = 1
+
+
+    def _init_trace(self, name):
+        if not (name in self.traces):
+            self.traces[name] = []
+
+
+    def names():
+        return list(self.traces.keys())
+    def _call_(self, name, value):
+        self._init_trace(name)
+        self.traces[name].append(value)
+
+
+    def graph(self, name, strategy):
+        ax = self._figure.add_subplot(len(self.traces), 1, self.ax_index)
+        self.ax_index += 1
+        trace = self.traces[name]
+
+        if strategy == '2d_spike_plot':
+            trace_tensor = torch.stack(trace)
+            nplot.plot_spikes_2d(trace_tensor, axes=ax)
+            
+        elif strategy == 'scalar':
+            if type(trace[0]) == t:
+                trace = [t.cpu().numpy()[0] for t in trace]
+
+            ax.set_title(name)
+            ax.plot(trace)
+
+            
+    def figure():
+        return self._figure
+        
+        
+                
 class TraceLogger:
     def __init__(self):
         self.traces = {}

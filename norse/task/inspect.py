@@ -3,18 +3,19 @@ import torch
 import numpy as np
 import os
 from matplotlib import pyplot as plt
-from norse.torch.utils.plot import plot_spikes_2d, plot_heatmap_2d
 
+from norse.torch.utils.plot import plot_spikes_2d, plot_heatmap_2d
 from norse.torch.module import stdp
 from norse.torch.functional.lif import (
     LIFFeedForwardState,
     LIFParameters,
 )
 from norse.torch.module.lif import LIFCell
-
 from norse.torch.module import encode
-
 from norse.eval import graph
+from norse.task.pattern import _gen_seq_pattern
+
+
 import pathlib
 
 def _graph_lif_trace(z_trace, state_trace, param_descr, dt=0.001):
@@ -57,6 +58,57 @@ def _graph_lif_trace(z_trace, state_trace, param_descr, dt=0.001):
     fig.tight_layout()
 
     return fig
+
+
+def _graph_seq_pattern(seq_gen, iters=100):
+    spike_train = []
+    targets = []
+
+    for i, (target, spikes) in enumerate(seq_gen):
+        if i >= iters:
+            break
+        
+        spike_train.append(spikes)
+        targets.append(target)
+        
+    spike_train = torch.stack(spike_train)
+    targets = torch.tensor(targets).view(-1, 1)
+
+    fig = plt.Figure()
+    fig.suptitle("Spike Train")
+
+    ax = fig.add_subplot(211)
+    ax.set_title("Spikes")
+    ax.set_xlabel("Time")
+    ax.set_ylabel("Neurons")
+    plot_spikes_2d(spike_train, ax)
+
+    ax = fig.add_subplot(212)
+    ax.set_title("Target Output over time")
+    ax.set_xlabel("Time")
+    plot_spikes_2d(targets, ax)
+
+    return fig
+    
+    
+def _inspect_seq_data(path):
+    cfg = {
+        'data': {
+            'gen': "sequence_pattern",
+            'size': 10,
+            'num_targets': 3,
+            'num_background': 100,
+            'steps_per_pattern': 10,
+            'spike_rate_range': (0.3, 0.6),
+            }
+        }
+
+    seq_pattern_gen = _gen_seq_pattern(cfg)
+    
+    fig = _graph_seq_pattern(seq_pattern_gen, iters=150)
+    path = pathlib.Path(path)/"seq_gen.png"
+    
+    fig.savefig(str(path))
 
 
 def _get_lif_params():
@@ -261,6 +313,7 @@ def _parse_args():
     parser.add_argument('--lif', action='store_true')
     parser.add_argument('--stdp', action='store_true')
     parser.add_argument('--encode', action='store_true')
+    parser.add_argument('--seq-data-gen', action='store_true')
     
     parser.add_argument('--output', '-o', type=str)
 
@@ -274,20 +327,30 @@ def _main():
     if not path.exists():
         raise ValueError("--output must exist")
 
+    fn=None
+
     if args.stdp:
-        path_stdp = path/"stdp"
-        _inspect_stdp(str(path_stdp))
+        path = path/"stdp"
+        fn = _inspect_stdp
 
     if args.lif:
-        path_lif = path/"lif"
-        _inspect_lif(str(path_lif))
+        path = path/"lif"
+        fn = _inspect_lif
 
     if args.encode:
-        path_enc = path/"encode"
-        _inspect_encode(str(path_enc))
+        path = path/"encode"
+        fn = _inspect_encode
+
+    if args.seq_data_gen:
+        path = path/"seq_data"
+        fn = _inspect_seq_data
 
 
-    # _inspect_encode_mnist(str(path_encode))
+    if not (fn is None):
+        if not path.exists():
+            os.mkdir(str(path))
+
+        fn(str(path))
 
 
 if __name__ == '__main__':

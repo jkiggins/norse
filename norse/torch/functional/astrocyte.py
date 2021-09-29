@@ -1,34 +1,65 @@
 """
 Astrocyte model functional portion
 """
-
+from typing import NamedTuple
 import torch
 
-class AstroParameters(NamedTuple):
-    """
-    tau_pre (torch.Tensor): factor for internal state update from pre-synaptic activity
-    tau_post (torch.Tensor): factor for internal state update from post-synaptic activity
-    state_leak (torch.Tensor): Rate at which state regresses to its default value
-    """
 
-    tau_pre: torch.Tensor = torch.as_tensor(1e-3)
-    tau_post: torch.Tensor = torch.as_tensor(1e-3)
-    state_leak: torch.Tensor = torch.as_tensor(1e-4)
-    spike_aggregator: str = "average"
 
+class AstroLearningParams(NamedTuple):
+    upper_thr: torch.Tensor = torch.as_tensor(2)
+    lower_thr: torch.tensor = torch.as_tensor(1)
+
+
+class AstroActivityParams(NamedTuple):
+    target: torch.Tensor = torch.as_tensor(0.1)
+
+
+class AstroParams(NamedTuple):
+    tau: torch.Tensor = torch.as_tensor(1e-3)
+    alpha: torch.Tensor = torch.as_tensor(1e-3)
+    pconn: torch.Tensor = torch.as_tensor(0.2)
+    learning_params: AstroLearningParams = None
+    activity_params: AstroActivityParams = None
+
+    
 
 class AstroState(NamedTuple):
     """
     s: state variable
     """
 
-    s: torch.Tensor = torch.as_tensor(0.0)
+    pre: torch.Tensor = torch.as_tensor(0.0)
+    post: torch.Tensor = torch.as_tensor(0.0)
 
 
-def astro_neuron_step(pre_input_tensor, post_input_tensor, params, state):
-    if params['spike_aggregator'] == 'average':
-        pre_val = pre_input_tensor.mean()
-        post_val = post_input_tensor.mean()
+def _set_module_weights(module, bounding_func=None, new_weight=None, add=None, mult=None):
+    if new_weight:
+        w = new_weight
+            
+    elif add:
+        w = module.weights.detach()
+        w += add
+            
+    elif mult:
+        w = module.weights.detach()
+        w = w * mult
 
-    state 
+    if bounding_func: w = bounding_func(w)
+    module.weights.data = w
     
+    
+def astro_step(pre, post, params, state):
+    if state is None:
+        state = AstroState(pre=torch.zeros_like(pre), post=torch.zeros_like(post))
+        
+    state.pre += torch.mean(pre) * params.alpha - state.pre * params.tau * dt
+    state.post += torch.mean(post) * params.alpha - state.pre * params.tau * dt
+
+
+def astrocyte_step_learning(state, optimizer):
+    pass
+
+
+def astrocyte_step_activity(state, params, weight_module):
+    pass

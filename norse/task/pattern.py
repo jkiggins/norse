@@ -1,33 +1,60 @@
+
+# Torch imports
 import torch
 from torch import nn
 
+# Norse Imports
 from norse.torch.functional.lif import LIFParameters
 from norse.torch.module.leaky_integrator import LILinearCell
 from norse.torch.module.lif import LIFCell
 from norse.torch.module.stdp import STDPOptimizer
+from norse.eval import logger
+from norse.torch.utils import registry
+from norse.torch.module.astrocyte import Astrocyte
 
+# Other Libs
 from matplotlib import pyplot as plt
 
 from norse.eval import logger
 
 import pathlib
 import argparse
+import oyaml as yaml
+from pprint import pprint
 
 def _lif_from_cfg(cfg, dt=0.001):
     lif_params = LIFParameters(method=cfg['method'], v_reset=cfg['v_reset'], v_th=cfg['v_th'])
     return LIFCell(p=lif_params, dt=dt)
+
+
+def _linear_from_params(in_features, out_features, params, dt=0.001):
+    layer = nn.Linear(in_features, out_features, bias=params['bias'])
     
+    if params['init'][0] == 'uniform':
+        nn.init.uniform_(layer.weight)
+    elif params['init'][0] == 'unity':
+        print("init weights unity")
+        layer.weight = nn.Parameter(torch.ones_like(layer.weight))
+    elif params['init'][0] == 'normal':
+        mu = params['init'][1]
+        sigma = params['init'][2]
+        nn.init.normal_(layer.weight, mean=mu, std=sigma)
+                    
+    torch.clip(layer.weight, 0.0, 1.0)
+
+    return layer
+
 
 class PatternNet(torch.nn.Module):
+    # TODO: Convert to from_cfg format
     def __init__(self, cfg,
                  optimizer=None,
-                 dtype=torch.float,
-                 dt=0.001):
+                 dtype=torch.float):
 
         super(PatternNet, self).__init__()
-        
-        lif_cfg = cfg['lif']
 
+        dt = cfg['sim']['dt']
+        
         self.optimizer = optimizer
         self.monitors = []
         
@@ -135,6 +162,28 @@ def _gen_spikes(*pattern):
     return pattern_fn_dict[pattern[0]](*arg_list)
 
 
+def _sim_spikes(features):
+    def generator():
+        spike_idx = 0
+        spike_delta = 1
+
+        while True:
+            spikes = torch.zeros(features)
+            spikes[spike_idx] = 1
+
+            if (spike_idx+spike_delta) >= features or (spike_idx+spike_delta) < 0:
+                spike_delta = -spike_delta
+            spike_idx += spike_delta
+
+            target = [0, 1]
+            if spike_idx >= (features // 2):
+                target = [1, 0]
+
+            yield spikes, torch.Tensor([target])
+
+    return generator()
+
+
 def _spikes_from_cfg(cfg):
     spike_sets = []
     for pattern in cfg['input']['patterns']:
@@ -147,8 +196,7 @@ def _load_config(path):
     path = pathlib.Path(path)
 
     if not path.exists():
-        raise ValueError("Path: {} doesn't exist")
-
+        raise ValueError("Path: {} doesn't exist".format(str(path)))
 
     with open(str(path), 'rb') as f:
         cfg = yaml.load(f)
@@ -188,7 +236,69 @@ def _pack_spike_samples(spike_samples, padding=10):
 
         yield sample
 
+
+def _gen_seq_pattern(cfg):
+    size = cfg['data']['width']
+    targets = cfg['data']['num_targets']
+    backgrounds = cfg['data']['num_background']
+    steps_per_pattern = cfg['data']['steps_per_pattern']
+    steps = (targets + backgrounds)*steps_per_pattern
+    spike_rate_range = cfg['data']['spike_rate_range']
+
+    # Generate spikes for the whole simulation time-line
+    p_rates = torch.rand((steps, size))
+    p_rates = p_rates * abs(spike_rate_range[0] - spike_rate_range[1]) + min(spike_rate_range)
+    full_spike_train = torch.poisson(p_rates).type(torch.int)
+
+    # Pick out patterns
+    pattern_indicies = torch.Tensor(range(targets+backgrounds))[torch.randperm(size)][0:targets]
+
+    # Split timeline into segments
+    spike_train_segments = [full_spike_train[i:i+steps_per_pattern] for i in range(0, steps, steps_per_pattern)]
+
+    while True:
+        rand_segment = torch.randint(0, len(spike_train_segments), (1,)).numpy()[0]
+        segment = spike_train_segments[rand_segment]
+
+        for time_slice in segment:
+            time_slice = (time_slice > 0).type(torch.float)
+            target = torch.tensor(int((rand_segment in pattern_indicies) * 1)).type(torch.float)
+            yield target, time_slice
     
+
+
+def _gen_onehot_pattern(cfg):
+    width = cfg['data']['width']
+    target_ratio = cfg['data']['target_ratio']
+    
+    pat_idxs = None
+    random_idx = torch.randperm(width)
+    patterns = torch.eye(width)[random_idx]
+    pat_idxs = random_idx[range(0, int(width*target_ratio))]
+
+    while True:
+        rand_idx = torch.randint(0, len(patterns), (1,))[0]
+
+        pat = patterns[rand_idx].type(torch.float)
+        target = torch.tensor((rand_idx in pat_idxs) * 1.0)
+
+        yield target, pat
+                
+
+def _get_data(cfg):
+    # Handle generated data
+    def _get_gen_data(cfg):
+        gen_data_functions = {
+            'sequence': _gen_seq_pattern,
+            'onehot': _gen_onehot_pattern
+        }
+
+        return gen_data_functions[cfg['data']['gen']](cfg)
+
+    if 'gen' in cfg['data']:
+        return _get_gen_data(cfg)
+
+
 def _train(model, cfg, inputs, targets, optim, repeat=10):
 
     print("\nTraining")
@@ -237,7 +347,8 @@ def _main():
             # {'features': 2, 'bias': True, 'init': 'uniform'},
             # {'features': 1, 'bias': False, 'init': 'uniform'},
         ],
-        'train': {'optimize': True, 'epochs': 5}
+        'train': {'optimize': True, 'epochs': 5},
+        'sim': {'dt': 0.001},
     }
 
     spike_set = _gen_spikes('onehot', input_features)
@@ -252,7 +363,7 @@ def _main():
     stdp_monitor = logger.STDPMonitor()
     stdp_optimizer = STDPOptimizer(alpha=1e-1, decay_fn='recent', monitor=stdp_monitor)
 
-    model = PatternNet(cfg, dt=0.0001, optimizer=stdp_optimizer)
+    model = PatternNet(cfg, optimizer=stdp_optimizer)
     model.add_monitor(spike_monitor)
     
     _train(model, cfg, spike_set, targets, stdp_optimizer, repeat=1)
