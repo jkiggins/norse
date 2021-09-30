@@ -22,12 +22,14 @@ import argparse
 import oyaml as yaml
 from pprint import pprint
 
-def _lif_from_cfg(cfg, dt=0.001):
+
+def _lif_from_params(cfg, dt=0.001):
     lif_params = LIFParameters(method=cfg['method'], v_reset=cfg['v_reset'], v_th=cfg['v_th'])
+    
     return LIFCell(p=lif_params, dt=dt)
 
 
-def _linear_from_params(in_features, out_features, params, dt=0.001):
+def _linear_from_params(in_features, out_features, params):
     layer = nn.Linear(in_features, out_features, bias=params['bias'])
     
     if params['init'][0] == 'uniform':
@@ -62,28 +64,33 @@ class PatternNet(torch.nn.Module):
         self._lif_module_list = nn.ModuleList()
         self._lif_state_dict = {}
 
+        self.snn_modules = []
+
         # Create and init layers
-        features = cfg['input_features']
-        for l in cfg['layers']:
-            layer = nn.Linear(features, l['features'], bias=l['bias'])
-            lif_layer = _lif_from_cfg(cfg['lif'], dt=dt)
+        for key, l in cfg['topology'].items():
+            # Create layers
+            linear_layer = None
+            lif_layer = None
+        
+            if key == 'input':
+                if l['type'] == 'lif':
+                    lif_layer = _lif_from_params(cfg['lif_params'], dt=dt)
+                    
+            elif l['type'] == 'lif':
+                linear_layer = _linear_from_params(features, l['num'], cfg['linear_params'])
+                lif_layer = _lif_from_params(cfg['lif_params'], dt=dt)
 
-            if l['init'][0] == 'uniform':
-                nn.init.uniform_(layer.weight)
-            elif l['init'][0] == 'unity':
-                print("init weights unity")
-                layer.weight = nn.Parameter(torch.ones_like(layer.weight))
-            elif l['init'][0] == 'normal':
-                nn.init.normal_(layer.weight, mean=l['init'][1]['mu'], std=l['init'][1]['sigma'])
-                
-            torch.clip(layer.weight, 0.0, 1.0)
+            # Fill various lists
+            if linear_layer:
+                self._module_list.append(linear_layer)
 
-            self._module_list.append(layer)
-            self._lif_module_list.append(lif_layer)
+            if lif_layer:
+                self._lif_module_list.append(lif_layer)
+                self._lif_state_dict[lif_layer] = None
 
-            self._lif_state_dict[lif_layer] = None
+            self.snn_modules.append((linear_layer, lif_layer))
        
-            features = l['features']
+            features = l['num']
 
 
     def add_monitor(self, monitor):
@@ -213,16 +220,19 @@ def _parse_args():
     return parser.parse_args()
 
 
-def _eval(patterns, targets, model, cfg, repeat=10):
+def _eval(data, model, cfg, iters=None):
     correct = []
     model.stop_monitoring()
-    for i, pat in enumerate(patterns):
+    for i, (target, spike_vector) in enumerate(data):
         model.reset_state()
-        for j in range(repeat):
-            model(pat)
-            z = model(pat)
-            print("z: {}, target: {}".format(z, targets[i]))
-            correct.append(z == targets[i])
+
+        if i >= iters:
+            break
+
+        model(spike_vector)
+        z = model(spike_vector)
+        print("z: {}, target: {}".format(z, target))
+        correct.append(z == target)
 
     correct = torch.vstack(correct)*1.0
     print("accuracy: ", correct.mean())
@@ -270,19 +280,22 @@ def _gen_seq_pattern(cfg):
 def _gen_onehot_pattern(cfg):
     width = cfg['data']['width']
     target_ratio = cfg['data']['target_ratio']
-    
-    pat_idxs = None
+
+    # Generate a random set of one-hot vectors
     random_idx = torch.randperm(width)
-    patterns = torch.eye(width)[random_idx]
-    pat_idxs = random_idx[range(0, int(width*target_ratio))]
+    spike_vectors = torch.eye(width)[random_idx]
+
+    # Pick width*target_ratio target patterns
+    target_idxs = random_idx[range(0, int(width*target_ratio))]
 
     while True:
-        rand_idx = torch.randint(0, len(patterns), (1,))[0]
+        # pick a random sample
+        rand_idx = int(torch.randint(0, spike_vectors.shape[0], (1,)))
 
-        pat = patterns[rand_idx].type(torch.float)
-        target = torch.tensor((rand_idx in pat_idxs) * 1.0)
+        spike_vector = spike_vectors[rand_idx].type(torch.float)
+        target = torch.Tensor([rand_idx in target_idxs * 1.0]).type(torch.float)
 
-        yield target, pat
+        yield target, spike_vector
                 
 
 def _get_data(cfg):
@@ -299,74 +312,72 @@ def _get_data(cfg):
         return _get_gen_data(cfg)
 
 
-def _train(model, cfg, inputs, targets, optim, repeat=10):
-
+def _train(model, cfg, data, optim, reward_fn, monitors=[]):
     print("\nTraining")
     # Train
-    for epoch in range(cfg['train']['epochs']):
-        # shuffle_idx = torch.randperm(spike_set.shape[0])
-        # spike_set = spike_set[shuffle_idx, :]
-        # targets = targets[shuffle_idx]
+    for epoch in range(cfg['learning']['epochs']):
+        for i, (target, spike_vector) in enumerate(data):
+            # If samples are statistically independant, reset state
+            if not cfg['learning']['correlated_inputs']:
+                model.reset_state()
+                optim.reset_state()
 
-        for i, spike_vector in enumerate(inputs):
-            model.reset_state()
-            optim.reset_state()
-            for j in range(repeat):
-                
-                z = model(spike_vector, optimize=cfg['train']['optimize'])
-                z = model(torch.zeros_like(spike_vector), optimize=cfg['train']['optimize'])
-                reward = ((z == targets[i])*1.0 - 0.5)*2.0
-                optim.step(reward=reward)
-
-            # fig = plt.Figure()
-            # ax = spike_monitor.graph_timeline(ax=fig.add_subplot())
-            # logger.savefig(fig, "epoch_{}_spikes.png".format(epoch))
+            if i >= cfg['learning']['iters_per_epoch']:
+                break
+            
+            z = model(spike_vector, optimize=cfg['learning']['optimize'])
+            z = model(torch.zeros_like(spike_vector), optimize=cfg['learning']['optimize'])
+            reward = reward_fn(target, z)
+            optim.step(reward=reward)
 
     print("\nAfter Training")
     model.reset_state()
-    _eval(inputs, targets, model, cfg, repeat=repeat)
+    _eval(data, model, cfg, iters=cfg['learning']['iters_per_epoch'])
+    
+
+def _fill_registry():
+    def _onehot_reward(target, z):
+        reward = ((z == target)*1.0 - 0.5)*2.0
+
+        return reward
+
+    def _seq_reward(target, z):
+        if target == z:
+            return 1.0
+        elif target != z and np.isclose(z, 0.0):
+            return -1.0
+        else:
+            return 0.0
+        
+    registry.add_entry("_onehot_reward", _onehot_reward)
+    registry.add_entry("_seq_reward", _seq_reward)
     
     
 def _main():
     args = _parse_args()
-    
-    spike_vector_len = 100
-    num_iters = 100
-    
+
+    _fill_registry()
+    cfg = _load_config(args.config)
+
     spike_monitor = logger.SpikeMonitor(weight_hist_iter=args.iters // 10)
-
-    input_features = 10
-    v_reset = -0.3
-    v_th = 0.3
-    
-    cfg = {
-        'input_features': input_features,
-        'lif': {'method': 'super', 'v_reset': v_reset, 'v_th': v_th},
-        'layers': [
-            {'features': 1, 'bias': False, 'init': ('normal', {'mu': 0.5, 'sigma': 0.05})},
-            # {'features': 2, 'bias': True, 'init': 'uniform'},
-            # {'features': 1, 'bias': False, 'init': 'uniform'},
-        ],
-        'train': {'optimize': True, 'epochs': 5},
-        'sim': {'dt': 0.001},
-    }
-
-    spike_set = _gen_spikes('onehot', input_features)
-
-    # pick a random number of iters to be associated with a 1, then pick those random inputs
-    targets = torch.zeros((spike_set.shape[0]))
-    target_iters = torch.randint(targets.shape[0] // 2, (1,)).tolist()[0] + 1
-    
-    for i in range(target_iters):
-        targets[torch.randint(targets.shape[0], (1,))] = 1
-        
     stdp_monitor = logger.STDPMonitor()
     stdp_optimizer = STDPOptimizer(alpha=1e-1, decay_fn='recent', monitor=stdp_monitor)
 
     model = PatternNet(cfg, optimizer=stdp_optimizer)
     model.add_monitor(spike_monitor)
-    
-    _train(model, cfg, spike_set, targets, stdp_optimizer, repeat=1)
+
+    data = _get_data(cfg)
+    # data_tmp = []
+    # for i, (target, spike_vector) in enumerate(data):
+    #     data_tmp.append((target, spike_vector))
+        
+    #     if i >= cfg['learning']['iters_per_epoch']:
+    #         break
+    # data = data_tmp
+
+    reward_fn = registry.get_entry(cfg['learning']['reward_fn'])
+
+    _train(model, cfg, data, stdp_optimizer, reward_fn)
 
 
 if __name__ == '__main__':
