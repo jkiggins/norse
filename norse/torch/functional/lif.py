@@ -251,9 +251,6 @@ def _lif_feed_forward_step_jit(
     p: LIFParametersJIT,
     dt: float = 0.001,
 ) -> Tuple[torch.Tensor, LIFFeedForwardState]:  # pragma: no cover
-    # Compute new spikes (based on current state)
-    z_new = threshold(state.v - p.v_th, p.method, p.alpha)
-
     # Compute current updates
     di = -dt * p.tau_syn_inv * state.i  # Current Decay
     i_decayed = state.i + di
@@ -262,6 +259,10 @@ def _lif_feed_forward_step_jit(
     # Compute voltage updates
     dv = dt * p.tau_mem_inv * (p.v_leak - state.v) + i_new  # Voltage decay + Increase from Current
     v_new = state.v + dv
+
+    # Compute new spikes (based on new state)
+    z_new = threshold(v_new - p.v_th, p.method, p.alpha)
+    
     # Apply reset voltage if there is a spike
     v_new = (1 - z_new) * v_new + z_new * p.v_reset
 

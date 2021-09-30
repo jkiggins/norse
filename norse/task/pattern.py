@@ -229,7 +229,6 @@ def _eval(data, model, cfg, iters=None):
         if i >= iters:
             break
 
-        model(spike_vector)
         z = model(spike_vector)
         print("z: {}, target: {}".format(z, target))
         correct.append(z == target)
@@ -326,7 +325,6 @@ def _train(model, cfg, data, optim, reward_fn, monitors=[]):
                 break
             
             z = model(spike_vector, optimize=cfg['learning']['optimize'])
-            z = model(torch.zeros_like(spike_vector), optimize=cfg['learning']['optimize'])
             reward = reward_fn(target, z)
             optim.step(reward=reward)
 

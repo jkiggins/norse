@@ -257,6 +257,7 @@ def stdp_step_linear(
 
     
     if all(tensor_has_batch):
+        raise NotImplementedError("Support for same time-step pre and post-synaptic spikes not implemented for inputs w/ batch dimension")
         dw_plus = p_stdp.A_plus(w) * torch.einsum("bi,bj->ij", z_post, state_stdp.t_pre)
         dw_minus = p_stdp.A_minus(w) * torch.einsum("bi,bj->ij", state_stdp.t_post, z_pre)
     elif any(tensor_has_batch):
@@ -265,11 +266,12 @@ def stdp_step_linear(
         dw_plus = p_stdp.A_plus(w) * torch.einsum("i,j->ij", z_post, state_stdp.t_pre)
         dw_minus = p_stdp.A_minus(w) * torch.einsum("i,j->ij", state_stdp.t_post, z_pre)
 
+        # Only consider dw_plus when both spike
+        not_both_spike = torch.logical_or(z_post == 0, z_pre == 0)
+        dw_minus *= not_both_spike
 
-    # If both spike at the same time, there is no weight update
-    dw_valid = torch.logical_or(torch.isclose(dw_plus, torch.Tensor([0.0])), torch.isclose(dw_minus, torch.Tensor([0.0])))
 
-    dw = (dw_plus - dw_minus) * dw_valid * reward
+    dw = (dw_plus - dw_minus) * reward
 
     w = w + dw
 
