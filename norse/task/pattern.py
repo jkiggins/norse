@@ -120,6 +120,24 @@ class PatternNet(torch.nn.Module):
             monitor(pre, lif_state_pre, real_module, spiking_module, post, pre_is_input=pre_is_input, name=name)
 
 
+    def optimizer_step(self, pre, post, weight_module, name="", optimize=False):
+        if optimize and self.optimizer:
+            self.optimizer(weight_module, pre, post, name="fc{}".format(name))
+
+
+    def monitor_step(pre, lif_state_pre, weight_module, spiking_module, post, pre_is_input=False, name=""):
+        for monitor in self.monitors:
+            monitor(pre, lif_state_pre, real_module, spiking_module, post, pre_is_input=pre_is_input, name=name)
+
+
+    def astro_forward(pre_node, post_node):
+        for astro in self.astro_modules_list:
+            astro_state = self._astro_states[astro]
+            astro_effect, astro_state = astro.forward(pre_node, post_node, astro_state)
+            self._astro_states[astro] = astro_state
+
+        
+
     def forward(self, z, optimize=False):
 
         first_pass = True
@@ -133,7 +151,8 @@ class PatternNet(torch.nn.Module):
 
             self._lif_state_dict[lif] = lif_state
             
-            self.synapse_forward(z_pre, lif_state, linear, lif, z, optimize=optimize, pre_is_input=first_pass, name=str(i))
+            # self.synapse_forward(z_pre, lif_state, linear, lif, z, optimize=optimize, pre_is_input=first_pass, name=str(i))
+            self.optimizer_step(z_pre, z, linear, name=str(i), optimize=optimize)
             first_pass = False
 
         return z

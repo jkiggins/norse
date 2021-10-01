@@ -5,7 +5,6 @@ from typing import NamedTuple
 import torch
 
 
-
 class AstroLearningParams(NamedTuple):
     upper_thr: torch.Tensor = torch.as_tensor(2)
     lower_thr: torch.tensor = torch.as_tensor(1)
@@ -13,12 +12,12 @@ class AstroLearningParams(NamedTuple):
 
 class AstroActivityParams(NamedTuple):
     target: torch.Tensor = torch.as_tensor(0.1)
+    alpha: torch.Tensor = torch.as_tensor(1.0)
 
 
 class AstroParams(NamedTuple):
     tau: torch.Tensor = torch.as_tensor(1e-3)
     alpha: torch.Tensor = torch.as_tensor(1e-3)
-    pconn: torch.Tensor = torch.as_tensor(0.2)
     learning_params: AstroLearningParams = None
     activity_params: AstroActivityParams = None
 
@@ -56,10 +55,14 @@ def astro_step(pre, post, params, state):
     state.pre += torch.mean(pre) * params.alpha - state.pre * params.tau * dt
     state.post += torch.mean(post) * params.alpha - state.pre * params.tau * dt
 
+    return state
 
-def astrocyte_step_learning(state, optimizer):
+
+def astrocyte_effect_learning(state):
     pass
 
 
-def astrocyte_step_activity(state, params, weight_module):
-    pass
+def astro_get_presynaptic_current(state, params):
+    cur = params.activity_params.alpha * (params.activity_params.target - state.post)
+
+    return cur

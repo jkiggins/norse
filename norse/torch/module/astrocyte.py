@@ -2,7 +2,7 @@
 NN Module that models (to a degree) astrocyte behavior
 """
 
-from norse.torch.functional.astrocyte import AstroParams, AstroActivityParams, astro_step
+from norse.torch.functional.astrocyte import AstroParams, AstroActivityParams, astro_step, astro_get_presynaptic_current
 
 class Astrocyte:
     def __init__(self, params, mod_learning=False, mod_activity=False):
@@ -25,14 +25,16 @@ class Astrocyte:
         return Astrocyte(params, mod_activity=cfg['adapt']['enabled'])
 
 
-    def effect(state):
-        pass
+    def _effect(state):
+        effect_dict = {
+            'post_synaptic_current': astro_get_presynaptic_current(state)
+        }
+
+        return effect_dict
         
 
     def forward(pre_spikes, post_spikes, state):
-        self.astro_step(pre_spikes, post_spikes, params)
-        if self.mod_activity:
-            astrocyte_step_activity(state, self.params, module)
+        state = self.astro_step(pre_spikes, post_spikes, self.params)
 
-        return state
+        return self._effect(state), state
         
