@@ -12,5 +12,5 @@ def get_entry(key):
     if key in _registry_:
         return _registry_[key]
 
-    return None
+    raise ValueError("Registry entry {} not found".format(key))
                         

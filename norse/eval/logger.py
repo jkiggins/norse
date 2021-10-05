@@ -19,6 +19,10 @@ def set_path(path):
     _writer_ = SummaryWriter(log_dir=_path_)
 
 
+def get_path():
+    return _path_
+
+
 def savefig(fig, file_name):
     global _path_
     
@@ -167,9 +171,11 @@ class NeuroMonitor:
             self.traces[name] = []
 
 
-    def names():
+    def names(self):
         return list(self.traces.keys())
-    def _call_(self, name, value):
+
+    
+    def __call__(self, name, value):
         self._init_trace(name)
         self.traces[name].append(value)
 
@@ -184,14 +190,16 @@ class NeuroMonitor:
             nplot.plot_spikes_2d(trace_tensor, axes=ax)
             
         elif strategy == 'scalar':
-            if type(trace[0]) == t:
+            if type(trace[0]) == torch.Tensor:
                 trace = [t.cpu().numpy()[0] for t in trace]
 
-            ax.set_title(name)
             ax.plot(trace)
 
+        ax.set_title(name)
             
-    def figure():
+    def figure(self):
+        self._figure.tight_layout()
+
         return self._figure
         
         

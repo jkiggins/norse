@@ -2,39 +2,65 @@
 NN Module that models (to a degree) astrocyte behavior
 """
 
-from norse.torch.functional.astrocyte import AstroParams, AstroActivityParams, astro_step, astro_get_presynaptic_current
+from norse.torch.functional.astrocyte import (
+    AstroParams,
+    AstroActivityParams,
+    astro_state_prop_inc_exp_decay,
+    astro_porportional_presynaptic_current,
+    astro_const_presynaptic_current
+)
+
+from norse.torch.utils import registry
 
 class Astrocyte:
-    def __init__(self, params, mod_learning=False, mod_activity=False):
+    def __init__(self, params, state_fn, effect_fn, dt=0.001):
         self.params = params
-        self.mod_learning = mod_learning
-        self.mod_activity = mod_activity
-        self.astro_step = astro_step
+        self.dt = dt
+        self.state_fn = state_fn
+        self.effect_fn = effect_fn
 
 
     def from_cfg(cfg):
+        activity_cfg = cfg['astro_params']['activity_params']
+        
+        effect_fn_name = activity_cfg['affect_algo']
+        effect_fn = registry.get_entry(effect_fn_name)
 
-        learning_params = None
-        if cfg['adapt']['enabled']:
-            learning_params = AstroActivityParams(target=cfg['adapt']['target'])
-                                                  
-        params = AstroParams(alpha=cfg['alpha'],
-                                 tau=cfg['tau'],
-                                 learning_params=learning_params)
+        state_fn_name = cfg['astro_params']['state_update_algo']
+        state_fn = registry.get_entry(state_fn_name)
 
-        return Astrocyte(params, mod_activity=cfg['adapt']['enabled'])
+        if effect_fn_name == "astro_const_presynaptic_current":
+            activity_params = AstroActivityParams(
+                thr=activity_cfg['thr'],
+                const_effect=activity_cfg['const_effect'])
 
+        elif effect_fn_name == "astro_proportional_presynaptic_current":
+            activity_params = AstroActivityParams(
+                alpha=activity_cfg['alpha'],
+                target=activity_cfg['target'])
 
-    def _effect(state):
-        effect_dict = {
-            'post_synaptic_current': astro_get_presynaptic_current(state)
-        }
+        else:
+            raise ValueError("Unknown effect function {}".format(effect_fn_name))
 
-        return effect_dict
+        params = AstroParams(
+            tau=cfg['astro_params']['tau'],
+            alpha=cfg['astro_params']['alpha'],
+            activity_params=activity_params
+        )
+
+        return Astrocyte(params, state_fn, effect_fn, dt=cfg['sim']['dt'])
         
 
-    def forward(pre_spikes, post_spikes, state):
-        state = self.astro_step(pre_spikes, post_spikes, self.params)
+    def _effect(self, state):
+        return self.effect_fn(state, self.params)
+        
+
+    def forward(self, z, state):
+        state = self.state_fn(z, self.params, state, dt=self.dt)
 
         return self._effect(state), state
-        
+
+
+registry.add_entry("astro_state_prop_inc_exp_decay", astro_state_prop_inc_exp_decay)
+registry.add_entry("astro_proportional_presynaptic_current", astro_porportional_presynaptic_current)
+registry.add_entry("astro_const_presynaptic_current", astro_const_presynaptic_current)
