@@ -6,8 +6,9 @@ from norse.torch.functional.astrocyte import (
     AstroParams,
     AstroActivityParams,
     astro_state_prop_inc_exp_decay,
-    astro_porportional_presynaptic_current,
-    astro_const_presynaptic_current
+    astro_proportional_effect,
+    astro_const_effect,
+    astro_inc_dec_effect,
 )
 
 from norse.torch.utils import registry
@@ -21,7 +22,10 @@ class Astrocyte:
 
 
     def from_cfg(cfg):
-        activity_cfg = cfg['astro_params']['activity_params']
+        activity_cfg_name = cfg['astro_params']['activity_params']
+        if not (activity_cfg_name in cfg['astro_params']):
+            raise ValueError("{} is not a valid activity config".format(activity_cfg_name))
+        activity_cfg = cfg['astro_params'][activity_cfg_name]
         
         effect_fn_name = activity_cfg['affect_algo']
         effect_fn = registry.get_entry(effect_fn_name)
@@ -29,15 +33,25 @@ class Astrocyte:
         state_fn_name = cfg['astro_params']['state_update_algo']
         state_fn = registry.get_entry(state_fn_name)
 
-        if effect_fn_name == "astro_const_presynaptic_current":
+        if effect_fn_name == "astro_const_effect":
             activity_params = AstroActivityParams(
                 thr=activity_cfg['thr'],
                 const_effect=activity_cfg['const_effect'])
 
-        elif effect_fn_name == "astro_proportional_presynaptic_current":
+        elif effect_fn_name == "astro_proportional_effect":
             activity_params = AstroActivityParams(
                 alpha=activity_cfg['alpha'],
                 target=activity_cfg['target'])
+
+        elif effect_fn_name == "astro_inc_dec_effect":
+            activity_params = AstroActivityParams(
+                inc_low_thr = activity_cfg['inc_low_thr'],
+                inc_step = activity_cfg['inc_step'],
+                max_e = activity_cfg['max'],
+                dec_high_thr = activity_cfg['dec_high_thr'],
+                dec_step = activity_cfg['dec_step'],
+                min_e = activity_cfg['min'])
+
 
         else:
             raise ValueError("Unknown effect function {}".format(effect_fn_name))
@@ -58,9 +72,10 @@ class Astrocyte:
     def forward(self, z, state):
         state = self.state_fn(z, self.params, state, dt=self.dt)
 
-        return self._effect(state), state
+        return self._effect(state)
 
 
 registry.add_entry("astro_state_prop_inc_exp_decay", astro_state_prop_inc_exp_decay)
-registry.add_entry("astro_proportional_presynaptic_current", astro_porportional_presynaptic_current)
-registry.add_entry("astro_const_presynaptic_current", astro_const_presynaptic_current)
+registry.add_entry("astro_proportional_effect", astro_proportional_effect)
+registry.add_entry("astro_const_effect", astro_const_effect)
+registry.add_entry("astro_inc_dec_effect", astro_inc_dec_effect)

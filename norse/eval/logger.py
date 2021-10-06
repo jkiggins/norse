@@ -164,12 +164,12 @@ class NeuroMonitor:
         self.traces = {}
         self._figure = plt.Figure()
         self.ax_index = 1
+        self.staged_graphs = []
 
 
     def _init_trace(self, name):
         if not (name in self.traces):
             self.traces[name] = []
-
 
     def names(self):
         return list(self.traces.keys())
@@ -179,31 +179,65 @@ class NeuroMonitor:
         self._init_trace(name)
         self.traces[name].append(value)
 
+        
+    def trace(self, name, values=None, as_tensor=False):
+        if not (values is None):
+            self._init_trace(name)
+            self.traces[name] = list(values)
+        else:
+            trace = self.traces[name]
+            if as_tensor:
+                trace = torch.as_tensor(trace)
+            
+            return trace
+
+
+    def moving_average(self, name, dest_name, window=10):
+        trace = self.trace(name, as_tensor=True)
+        trace_unfolded = trace.unfold(0, window, 1)
+        trace_avg = trace_unfolded.mean(axis=1)
+
+        self.trace(dest_name, values=trace_avg)
+        
 
     def graph(self, name, strategy):
-        ax = self._figure.add_subplot(len(self.traces), 1, self.ax_index)
+        self.staged_graphs.append((name, strategy))
+        
+    def _graph_trace(self, name, strategy, num_total_plots):
+        ax = self._figure.add_subplot(num_total_plots, 1, self.ax_index)
         self.ax_index += 1
-        trace = self.traces[name]
+        
+        trace = self.trace(name)
 
         if strategy == '2d_spike_plot':
             trace_tensor = torch.stack(trace)
             nplot.plot_spikes_2d(trace_tensor, axes=ax)
-            
+
         elif strategy == 'scalar':
             if type(trace[0]) == torch.Tensor:
-                trace = [t.cpu().numpy()[0] for t in trace]
+                trace = [float(t.cpu().numpy()) for t in trace]
 
             ax.plot(trace)
+            ax.set_title(name)
 
-        ax.set_title(name)
             
     def figure(self):
-        self._figure.tight_layout()
+        num_plots = len(self.staged_graphs)
+        for name, strategy in self.staged_graphs:
+            self._graph_trace(name, strategy, num_plots)
 
-        return self._figure
-        
-        
+        fig = self._figure
+        fig.tight_layout()
+        fw, fh = fig.get_size_inches()
+        fig.set_size_inches(fw, 1.5 * num_plots)
                 
+        self._figure = plt.Figure()
+        self.staged_graphs = []
+        self.ax_index = 0
+        
+        return fig
+
+
 class TraceLogger:
     def __init__(self):
         self.traces = {}
