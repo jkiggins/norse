@@ -33,27 +33,32 @@ class STDPOptimizer:
         self.dt = dt
 
 
+    def from_cfg(cfg):
+        learning_cfg = cfg['learning']
+
+        if learning_cfg['rule'] not in ['rstdp', 'stdp']:
+            raise ValueError("Can't initialize STDPOptimizer for learning rule {}".format(learning_cfg['rule']))
+
+        return STDPOptimizer(decay_fn=learning_cfg['decay_fn'], dt=cfg['sim']['dt'])
+
+
     def to(self, device):
         self.stdp_conv_params.to(device)
         self.stdp_lin_params.to(device)
 
         
     def reset_state(self):
-        print("Stdp Reset State")
         for k in self._stdp_states:
             self._stdp_states[k] = None
         
 
     def init_stdp(self, module, in_x, out_x):
         if (not (module in self._stdp_states)) or (self._stdp_states[module] is None):
-            print("New Stdp State for: ", module)
             self._stdp_states[module] = STDPState(
                 t_pre=torch.zeros(in_x.shape).to(in_x.device),
                 t_post=torch.zeros(out_x.shape).to(in_x.device),
                 decay_fn=self.decay_fn
             )
-        else:
-            print("Stdp state found for: ", module)
 
             
     def _get_state(self, module):
@@ -102,7 +107,6 @@ class STDPOptimizer:
     
 
     def step(self, reward=1.0):
-        print("Stdp Step: ", len(self.stdp_steps))
         dw_arr = []
         for step in self.stdp_steps:
             dw = self._stdp_step(*step, reward=reward)

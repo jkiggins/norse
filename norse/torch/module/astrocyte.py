@@ -11,7 +11,7 @@ from norse.torch.functional.astrocyte import (
     astro_inc_dec_effect,
 )
 
-from norse.torch.utils import registry
+from norse.torch.utils import registry, config
 
 class Astrocyte:
     def __init__(self, params, state_fn, effect_fn, dt=0.001):
@@ -22,10 +22,7 @@ class Astrocyte:
 
 
     def from_cfg(cfg):
-        activity_cfg_name = cfg['astro_params']['activity_params']
-        if not (activity_cfg_name in cfg['astro_params']):
-            raise ValueError("{} is not a valid activity config".format(activity_cfg_name))
-        activity_cfg = cfg['astro_params'][activity_cfg_name]
+        activity_cfg = cfg['astro_params'].deref('activity_params')
         
         effect_fn_name = activity_cfg['affect_algo']
         effect_fn = registry.get_entry(effect_fn_name)
@@ -66,11 +63,11 @@ class Astrocyte:
         
 
     def _effect(self, state):
-        return self.effect_fn(state, self.params)
-        
+        return self.effect_fn(state, self.params)        
 
     def forward(self, z, state):
         state = self.state_fn(z, self.params, state, dt=self.dt)
+
 
         return self._effect(state)
 

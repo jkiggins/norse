@@ -159,7 +159,7 @@ class STDPMonitor:
 
 
 
-class NeuroMonitor:
+class TraceLogger:
     def __init__(self):
         self.traces = {}
         self._figure = plt.Figure()
@@ -175,9 +175,12 @@ class NeuroMonitor:
         return list(self.traces.keys())
 
     
-    def __call__(self, name, value):
+    def __call__(self, name, value, x=None):
         self._init_trace(name)
-        self.traces[name].append(value)
+        if not (x is None):
+            self.traces[name].append((x, value))
+        else:
+            self.traces[name].append(value)
 
         
     def trace(self, name, values=None, as_tensor=False):
@@ -202,7 +205,8 @@ class NeuroMonitor:
 
     def graph(self, name, strategy):
         self.staged_graphs.append((name, strategy))
-        
+
+
     def _graph_trace(self, name, strategy, num_total_plots):
         ax = self._figure.add_subplot(num_total_plots, 1, self.ax_index)
         self.ax_index += 1
@@ -214,31 +218,54 @@ class NeuroMonitor:
             nplot.plot_spikes_2d(trace_tensor, axes=ax)
 
         elif strategy == 'scalar':
-            if type(trace[0]) == torch.Tensor:
-                trace = [float(t.cpu().numpy()) for t in trace]
+            # if type(trace[0]) == torch.Tensor:
+            #     trace = [float(t.cpu().numpy()) for t in trace]
 
-            ax.plot(trace)
+            if type(trace[0]) == tuple:
+                x, trace = zip(*trace)
+                ax.plot(x, trace)
+            else:
+                ax.plot(trace)
+                
             ax.set_title(name)
 
-            
-    def figure(self):
+        return ax
+
+
+    def clear(self, name):
+        if name in self.traces:
+            del self.traces[name]
+
+
+    def figure(self, clear_traces=False, return_axes=False):
         num_plots = len(self.staged_graphs)
-        for name, strategy in self.staged_graphs:
-            self._graph_trace(name, strategy, num_plots)
+        axes = {}
+        ax_padding = 0.5
+        all_ax_height = 0
 
         fig = self._figure
-        fig.tight_layout()
+        
+        for name, strategy in self.staged_graphs:
+            ax = self._graph_trace(name, strategy, num_plots)
+            axes[name] = ax
+
+            if clear_traces:
+                self.clear(name)
+
         fw, fh = fig.get_size_inches()
-        fig.set_size_inches(fw, 1.5 * num_plots)
+        
+        fig.set_size_inches(fw, 12)
                 
         self._figure = plt.Figure()
         self.staged_graphs = []
-        self.ax_index = 0
-        
+        self.ax_index = 1
+
+        if return_axes:
+            return fig, axes
         return fig
 
 
-class TraceLogger:
+class TraceLoggerOld:
     def __init__(self):
         self.traces = {}
         self.step = 0
