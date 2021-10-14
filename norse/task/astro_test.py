@@ -2,6 +2,9 @@
 import torch
 from torch import nn
 
+from norse.torch.utils import plot as nplot
+from matplotlib import pyplot as plt
+
 # Norse Imports
 from norse.torch.functional.lif import LIFParameters
 from norse.torch.module.leaky_integrator import LILinearCell
@@ -114,7 +117,111 @@ class AstroAdaptNet(torch.nn.Module):
         return z, lif_state, astro_state, effect
 
 
-def _sim(cfg, data, model, monitor, optimizer=None, name=None):
+def _graph_sim(cfg, monitor):
+    fig = plt.Figure(figsize=(10, 15))
+
+    subplot_shape = (7,1)
+    
+    # Graph timelines
+    ax = fig.add_subplot(*subplot_shape,1)
+    ax.set_title("Presynaptic Spike Trace")
+    ax.set_xlabel("Time")
+    ax.set_ylabel("Spikes")
+    trace = monitor.trace("pre")
+    trace = torch.stack(trace)
+    nplot.plot_spikes_2d(trace, axes=ax)
+
+    ax = fig.add_subplot(*subplot_shape,2)
+    ax.set_title("Postsynaptic Spike Trace")
+    ax.set_xlabel("Time")
+    ax.set_ylabel("Spikes")
+    trace = monitor.trace("post")
+    trace = torch.stack(trace)
+    nplot.plot_spikes_2d(trace, axes=ax)
+
+    ax = fig.add_subplot(*subplot_shape,3)
+    ax.set_title("Astrocyte State Trace")
+    ax.set_xlabel("Time")
+    ax.set_ylabel("State")
+    trace = monitor.trace("astro_state")
+    ax.plot(trace)
+
+    ax = fig.add_subplot(*subplot_shape, 4)
+    ax.set_title("Astrocyte Effect Trace")
+    ax.set_xlabel("Time")
+    ax.set_ylabel("Astrocyte Effect")
+    trace = monitor.trace("astro_effect")
+    ax.plot(trace)
+
+    ax = fig.add_subplot(*subplot_shape, 5)
+    ax.set_title("Presynaptic Moving Average")
+    ax.set_xlabel("Time")
+    ax.set_ylabel("Moving Average Firing Rate")
+    trace = monitor.trace("pre_avg_rate")
+    ax.plot(trace)
+
+    ax = fig.add_subplot(*subplot_shape, 6)
+    ax.set_title("Postsynpatic Moving Average")
+    ax.set_xlabel("Time")
+    ax.set_ylabel("Moving Average Firing Rate")
+    trace = monitor.trace("post_avg_rate")
+    ax.plot(trace)
+
+    ax = fig.add_subplot(*subplot_shape, 7)
+    ax.set_title("Pre and Postsynpatic FFT")
+    ax.set_xlabel("Frequency")
+    ax.set_ylabel("Intensity")
+    trace = monitor.trace("post", as_tensor=True)
+    trace_fft = torch.fft.rfft(trace)
+    ax.plot(trace_fft)
+    trace = monitor.trace("pre", as_tensor=True)
+    trace_fft = torch.fft.rfft(trace)
+    ax.plot(trace_fft)
+    ax.legend()
+
+    fig.subplots_adjust(left=0.1,
+                        bottom=0.4, 
+                        right=0.9, 
+                        top=1.4, 
+                        wspace=0.4, 
+                        hspace=0.4)
+
+    path = pathlib.Path(logger.get_path())/"{}.png".format(cfg['sim']['sim_name'])
+    fig.savefig(str(path), bbox_inches="tight")
+
+
+def _graph_experiment(cfg, monitor):
+    fig = plt.Figure()
+
+    ax = fig.add_subplot(2,1,1)
+    ax.set_title("Pre Synaptic Range vs. Astrocyte Tau at Various Alpha")
+    ax.set_xlabel("Astrocyte State Tau")
+    ax.set_ylabel("Average Frequency Range")
+    trace = monitor.trace("pre_range")
+    for alpha in trace:
+        tau = [t[0] for t in trace[alpha]]
+        _range = [t[1] for t in trace[alpha]]
+        ax.plot(tau, _range, label='alpha={}'.format(alpha))
+
+
+    ax = fig.add_subplot(2,1,2)
+    ax.set_title("Post Synaptic Range vs. Astrocyte Tau at Various Alpha")
+    ax.set_xlabel("Astrocyte State Tau")
+    ax.set_ylabel("Average Frequency Range")
+    trace = monitor.trace("post_range")
+    for alpha in trace:
+        tau = [t[0] for t in trace[alpha]]
+        _range = [t[1] for t in trace[alpha]]
+        ax.plot(tau, _range, label='alpha={}'.format(alpha))
+
+
+    path = pathlib.Path(logger.get_path())/"{}.png".format(cfg['sim']['exp_name'])
+
+    fig.legend()
+    fig.savefig(str(path))
+
+
+def _sim(cfg, data, model, monitor, optimizer=None):
 
     model.optimizer = optimizer
     
@@ -132,39 +239,18 @@ def _sim(cfg, data, model, monitor, optimizer=None, name=None):
         monitor("astro_effect", astro_effect)
         monitor("weight", float(model.linear.weight.data.view(-1)))
 
-    monitor.graph('pre', '2d_spike_plot')
-    monitor.graph('post', '2d_spike_plot')
-    monitor.graph('astro_state', 'scalar')
-    monitor.graph('astro_effect', 'scalar')
-
     monitor.moving_average('pre', 'pre_avg_rate', window=50)
     monitor.moving_average('post', 'post_avg_rate', window=50)
 
-    monitor.graph('pre_avg_rate', 'scalar')
-    monitor.graph('post_avg_rate', 'scalar')
-    monitor.graph('weight', 'scalar')
-
-    # Compute aggregate stats for later graphing
-    activity_config = cfg['astro_params'].deref('activity_params')
-    pre_trace = monitor.trace('pre', as_tensor=True).mean()
-    monitor("pre_avg", pre_trace, x=activity_config['target'])
-    post_trace = monitor.trace('post', as_tensor=True).mean()
-    monitor("post_avg", post_trace, x=activity_config['target'])
-
-
-    fig = monitor.figure(clear_traces=True)
-    path = pathlib.Path(logger.get_path())/"{}.png".format(name)
-    fig.savefig(str(path))
-
+    _graph_sim(cfg, monitor)
+    
     
 def _experiment(cfg, exp_cfg, name=None):
     monitor = logger.TraceLogger()
     
     for i, next_cfg in enumerate(config.iter_configs(cfg, exp_cfg)):
-        sim_name_fn = registry.get_entry(cfg['sim']['name_fn'])
-        exp_name_fn = registry.get_entry(exp_cfg['name_fn'])
-        cfg['sim']['name'] = sim_name_fn(cfg)
-        exp_name = exp_name_fn(cfg, name)
+        next_cfg['sim']['sim_name'] = _sim_name_from_cfg(next_cfg)
+        next_cfg['sim']['exp_name'] = _exp_name_from_cfg(next_cfg, name)
         
         pprint(next_cfg)
 
@@ -172,22 +258,17 @@ def _experiment(cfg, exp_cfg, name=None):
         stdp_optimizer = STDPOptimizer.from_cfg(next_cfg)
         model = AstroAdaptNet.from_cfg(next_cfg, stdp_optimizer)
 
-        _sim(cfg, data, model, monitor, optimizer=stdp_optimizer, name="{}.{:04d}".format(exp_name, i))
+        _sim(cfg, data, model, monitor, optimizer=stdp_optimizer)
 
-    monitor.graph('pre_avg', 'scalar')
-    monitor.graph('post_avg', 'scalar')
+        # Aggregate stats
+        tau = next_cfg['astro_params']['tau']
+        alpha = next_cfg['astro_params']['alpha']
+        trace = monitor.trace('pre_avg_rate', as_tensor=True)
+        monitor('pre_range', alpha, (tau, trace.max() - trace.min()))
+        trace = monitor.trace('post_avg_rate', as_tensor=True)
+        monitor('post_range', alpha, (tau, trace.max() - trace.min()))
 
-    fig, axes = monitor.figure(return_axes=True)
-    axes['pre_avg'].set_title("Presynaptic Average Firing Rate vs. Astrocyte State Target")
-    axes['pre_avg'].set_xlabel("Astrocyte State Target")
-    axes['pre_avg'].set_ylabel("Average pre-synaptic Spiking Activity")
-
-    axes['post_avg'].set_title("Post-synaptic Average Firing Rate vs. Astrocyte State Target")
-    axes['post_avg'].set_xlabel("Astrocyte State Target")
-    axes['post_avg'].set_ylabel("Average post-synaptic Spiking Activity")
-
-    path = pathlib.Path(logger.get_path())/"{}.aggregate.png".format(name)
-    fig.savefig(str(path))
+    _graph_experiment(cfg, monitor)
 
         
 def _gen_poisson_ramp(cfg):
@@ -199,7 +280,7 @@ def _gen_poisson_ramp(cfg):
     if len(stops) == 0:
         raise ValueError("At least one stop is needed for poisson ramp")
     elif len(stops) == 1:
-        rate_seq = stop
+        rate_seq = stops
     else:
         rate_seq = torch.Tensor([])
         steps_per_stop = int(steps / (len(stops) - 1))
@@ -232,27 +313,20 @@ def _get_data(cfg):
         return _get_gen_data(cfg)
 
 
-def _name_from_cfg(cfg):
+def _sim_name_from_cfg(cfg):
     activity_config = cfg['astro_params'].deref('activity_params')
     target = activity_config['target']
 
     astro_tau = cfg['astro_params']['tau']
     astro_alpha = cfg['astro_params']['alpha']
     
-    name = "a{:05.3f}_t{:05.3f}_tar{:05.3f}".format(astro_alpha, astro_tau, target)
+    name = "a{:07.3f}_t{:07.3f}_tar{:07.3f}".format(astro_alpha, astro_tau, target)
 
     return name
 
 
 def _exp_name_from_cfg(cfg, exp_name):
-    name = "{}_{}".format(exp_name, cfg['sim']['name'])
-
-    return name
-
-
-def _fill_registry():
-    registry.add_entry('_name_from_cfg', _name_from_cfg)
-    registry.add_entry('_exp_name_from_cfg', _exp_name_from_cfg)
+    return exp_name
         
 
 def _parse_args():
@@ -268,7 +342,6 @@ def _main():
     args = _parse_args()
 
     logger.set_path('./runs/astro_test')
-    _fill_registry()
 
     cfg = config.load_config(args.config)
     

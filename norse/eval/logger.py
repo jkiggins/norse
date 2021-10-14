@@ -162,30 +162,37 @@ class STDPMonitor:
 class TraceLogger:
     def __init__(self):
         self.traces = {}
-        self._figure = plt.Figure()
+        
+        self._new_figure()
         self.ax_index = 1
         self.staged_graphs = []
 
 
-    def _init_trace(self, name):
-        if not (name in self.traces):
-            self.traces[name] = []
+    def _init_trace(self, _dict, name, dtype=[]):
+        if not (name in _dict):
+            _dict[name] = dtype
+
 
     def names(self):
         return list(self.traces.keys())
 
-    
-    def __call__(self, name, value, x=None):
-        self._init_trace(name)
-        if not (x is None):
-            self.traces[name].append((x, value))
-        else:
-            self.traces[name].append(value)
+    def __call__(self, name, *args):
+        if len(args) == 1:
+            self._init_trace(self.traces, name, [])
+            self.traces[name].append(args[0])
+            
+        elif len(args) == 2:
+            dict_key, val = args
+            
+            self._init_trace(self.traces, name, {})
+            self._init_trace(self.traces[name], dict_key, [])
+            
+            self.traces[name][dict_key].append(val)
 
         
     def trace(self, name, values=None, as_tensor=False):
         if not (values is None):
-            self._init_trace(name)
+            self._init_trace(self.traces, name, [])
             self.traces[name] = list(values)
         else:
             trace = self.traces[name]
@@ -227,7 +234,7 @@ class TraceLogger:
             else:
                 ax.plot(trace)
                 
-            ax.set_title(name)
+        ax.set_title(name)
 
         return ax
 
@@ -235,6 +242,10 @@ class TraceLogger:
     def clear(self, name):
         if name in self.traces:
             del self.traces[name]
+
+
+    def _new_figure(self):
+        self._figure = plt.Figure()
 
 
     def figure(self, clear_traces=False, return_axes=False):
@@ -256,9 +267,16 @@ class TraceLogger:
         
         fig.set_size_inches(fw, 12)
                 
-        self._figure = plt.Figure()
+        self._new_figure()
         self.staged_graphs = []
         self.ax_index = 1
+
+        fig.subplots_adjust(left=0.1,
+                            bottom=0.1, 
+                            right=0.9, 
+                            top=1.2, 
+                            wspace=0.4, 
+                            hspace=0.4)
 
         if return_axes:
             return fig, axes
