@@ -92,8 +92,12 @@ class Config:
         
     def as_dict(self):
         repr_dict = {}
+        
         for key in self:
-            repr_dict[key] = self[key]
+            if type(self[key]) == Config:
+                repr_dict[key] = self[key].as_dict()
+            else:
+                repr_dict[key] = self[key]
 
         return repr_dict
             
@@ -171,6 +175,9 @@ def iter_variations(cfg, strategy):
     stop = False
     while not stop:
         yield cfg
+
+        if len(variations) == 0:
+            break
         
         for i, node in enumerate(variations):
             if strategy == 'seq':
@@ -185,19 +192,6 @@ def iter_variations(cfg, strategy):
             if rollover and i == (len(variations) - 1):
                 stop = True
                 break
-                
-
-        
-    while not stop:
-        for node in cfg.traverse(bredth=True, objects=True):
-        
-                try:
-                    next(node)
-                except StopIteration as e:
-                    stop = True
-                    break
-
-        yield cfg
 
 
 def iter_configs(cfg, exp_cfg):

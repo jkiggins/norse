@@ -50,7 +50,7 @@ def astro_state_prop_inc_exp_decay(z, params, state, dt=0.001):
 # Effect
 def astro_proportional_effect(state, params):
     cur = params.activity_params.alpha * (params.activity_params.target - state.t_z)
-
+    
     return cur, state
 
 

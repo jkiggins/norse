@@ -22,6 +22,7 @@ from norse.eval import logger
 
 import pathlib
 import argparse
+import oyaml as yaml
 
 from pprint import pprint
 
@@ -112,7 +113,7 @@ class AstroAdaptNet(torch.nn.Module):
         self.astro_state = astro_state
         self.lif_state = lif_state
 
-        if self.optimize: self.optimizer(self.linear, z_pre, z)
+        # if self.optimize: self.optimizer(self.linear, z_pre, z)
 
         return z, lif_state, astro_state, effect
 
@@ -194,35 +195,48 @@ def _graph_experiment(cfg, monitor):
     fig = plt.Figure()
 
     ax = fig.add_subplot(2,1,1)
-    ax.set_title("Pre Synaptic Range vs. Astrocyte Tau at Various Alpha")
-    ax.set_xlabel("Astrocyte State Tau")
-    ax.set_ylabel("Average Frequency Range")
-    trace = monitor.trace("pre_range")
-    for alpha in trace:
-        tau = [t[0] for t in trace[alpha]]
-        _range = [t[1] for t in trace[alpha]]
-        ax.plot(tau, _range, label='alpha={}'.format(alpha))
+    ax.set_title("Pre and Post Synaptic Volume vs. Input Frequency")
+    ax.set_xlabel("Input Poisson Rate")
+    ax.set_ylabel("Spiking Volume")
+    
+    pre_trace = monitor.trace("pre_volume")
+    rate_trace = monitor.trace("rate")
+    ax.plot(rate_trace, pre_trace, label="Pre")
+
+    post_trace = monitor.trace("post_volume")
+    ax.plot(rate_trace, post_trace, label="Post")
 
 
     ax = fig.add_subplot(2,1,2)
-    ax.set_title("Post Synaptic Range vs. Astrocyte Tau at Various Alpha")
-    ax.set_xlabel("Astrocyte State Tau")
-    ax.set_ylabel("Average Frequency Range")
-    trace = monitor.trace("post_range")
-    for alpha in trace:
-        tau = [t[0] for t in trace[alpha]]
-        _range = [t[1] for t in trace[alpha]]
-        ax.plot(tau, _range, label='alpha={}'.format(alpha))
+    ax.set_title("Pre and Post Synaptic Volume vs. Tau")
+    ax.set_xlabel("Tau")
+    ax.set_ylabel("Spiking Volume")
+    
+    pre_trace = monitor.trace("pre_volume")
+    tau_trace = monitor.trace("tau")
+    ax.plot(tau_trace, pre_trace, label="Pre")
+
+    post_trace = monitor.trace("post_volume")
+    ax.plot(tau_trace, post_trace, label="Post")
 
 
     path = pathlib.Path(logger.get_path())/"{}.png".format(cfg['sim']['exp_name'])
 
     fig.legend()
-    fig.savefig(str(path))
+    fig.savefig(str(path), bbox_inches="tight")
+
+    
 
 
 def _sim(cfg, data, model, monitor, optimizer=None):
 
+    # Clear monitor
+    monitor.clear("pre")
+    monitor.clear("post")
+    monitor.clear("astro_state")
+    monitor.clear("astro_effect")
+    monitor.clear("weight")
+    
     model.optimizer = optimizer
     
     for i, spike_vector in enumerate(data):
@@ -230,7 +244,7 @@ def _sim(cfg, data, model, monitor, optimizer=None):
             break
 
         z, lif_state, astro_state, astro_effect = model(spike_vector)
-        if optimizer: optimizer.step()
+        # if optimizer: optimizer.step()
 
         # Graph a timeline of intermediate steps
         monitor("pre", spike_vector)
@@ -249,10 +263,10 @@ def _experiment(cfg, exp_cfg, name=None):
     monitor = logger.TraceLogger()
     
     for i, next_cfg in enumerate(config.iter_configs(cfg, exp_cfg)):
-        next_cfg['sim']['sim_name'] = _sim_name_from_cfg(next_cfg)
+        next_cfg['sim']['sim_name'] = _sim_name_from_cfg(next_cfg, i)
         next_cfg['sim']['exp_name'] = _exp_name_from_cfg(next_cfg, name)
-        
-        pprint(next_cfg)
+
+        print(yaml.dump(next_cfg.as_dict()))
 
         data = _get_data(next_cfg)
         stdp_optimizer = STDPOptimizer.from_cfg(next_cfg)
@@ -261,12 +275,13 @@ def _experiment(cfg, exp_cfg, name=None):
         _sim(cfg, data, model, monitor, optimizer=stdp_optimizer)
 
         # Aggregate stats
-        tau = next_cfg['astro_params']['tau']
-        alpha = next_cfg['astro_params']['alpha']
-        trace = monitor.trace('pre_avg_rate', as_tensor=True)
-        monitor('pre_range', alpha, (tau, trace.max() - trace.min()))
-        trace = monitor.trace('post_avg_rate', as_tensor=True)
-        monitor('post_range', alpha, (tau, trace.max() - trace.min()))
+        pre_trace = monitor.trace('pre', as_tensor=True)
+        post_trace = monitor.trace('post', as_tensor=True)
+        monitor('post_volume', post_trace.sum())
+        monitor('pre_volume', pre_trace.sum())
+
+        monitor('rate', next_cfg['data']['stops'])
+        monitor('tau', next_cfg['astro_params']['tau'])
 
     _graph_experiment(cfg, monitor)
 
@@ -277,6 +292,9 @@ def _gen_poisson_ramp(cfg):
     stops = cfg['data']['stops']
     steps = cfg['data']['steps']
 
+    if not hasattr(stops, '__iter__'):
+        stops = [stops]
+    
     if len(stops) == 0:
         raise ValueError("At least one stop is needed for poisson ramp")
     elif len(stops) == 1:
@@ -313,14 +331,14 @@ def _get_data(cfg):
         return _get_gen_data(cfg)
 
 
-def _sim_name_from_cfg(cfg):
+def _sim_name_from_cfg(cfg, i):
     activity_config = cfg['astro_params'].deref('activity_params')
     target = activity_config['target']
 
     astro_tau = cfg['astro_params']['tau']
     astro_alpha = cfg['astro_params']['alpha']
     
-    name = "a{:07.3f}_t{:07.3f}_tar{:07.3f}".format(astro_alpha, astro_tau, target)
+    name = "a{:07.3f}_t{:07.3f}_tar{:07.3f}-{:04d}".format(astro_alpha, astro_tau, target, i)
 
     return name
 
