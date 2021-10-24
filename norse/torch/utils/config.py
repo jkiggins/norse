@@ -1,8 +1,10 @@
 import oyaml as yaml
 import pathlib
 import copy
+from collections import OrderedDict
 
 from pprint import pformat
+
 
 import torch
 class ConfigValue:
@@ -43,7 +45,7 @@ class ConfigVariation(ConfigValue):
 
 class Config:
     def __init__(self, cfg_dict):
-        self.cfg_dict = {}
+        self.cfg_dict = OrderedDict()
         for key in cfg_dict:
             val = cfg_dict[key]
             val = ConfigValue(val)
@@ -90,12 +92,15 @@ class Config:
         return self[key]
         
         
-    def as_dict(self):
-        repr_dict = {}
+    def as_dict(self, ordered=False):
+        if ordered:
+            repr_dict = OrderedDict()
+        else:
+            repr_dict = {}
         
         for key in self:
             if type(self[key]) == Config:
-                repr_dict[key] = self[key].as_dict()
+                repr_dict[key] = self[key].as_dict(ordered=ordered)
             else:
                 repr_dict[key] = self[key]
 
