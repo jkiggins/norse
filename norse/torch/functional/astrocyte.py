@@ -44,7 +44,11 @@ def astro_state_prop_inc_exp_decay(z, params, state, dt=0.001):
         print("Astro state is None")
         state = {'t_z': 0.0}
 
+    if len(z) > 1:
+        z = float(z.mean())
+
     t_z_new = state['t_z'] + z * params['alpha'] - state['t_z'] * params['tau'] * dt
+    
     state['t_z'] = t_z_new
 
     return state
@@ -54,6 +58,9 @@ def astro_state_exp_avg(z, params, state, dt=0.001):
     if state is None:
         print("Astro state is None")
         state = {'t_z': 0.0}
+
+    if len(z) > 1:
+        z = float(z.mean())
 
     t_z_new = state['t_z'] * (1.0 - params['alpha']) + z * params['alpha']
     state['t_z'] = t_z_new

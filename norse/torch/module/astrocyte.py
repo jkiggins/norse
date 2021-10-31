@@ -30,7 +30,7 @@ class Astrocyte:
 
         state_fn = registry.get_entry(cfg['astro_params']['state_update_algo'])
         effect_fn = registry.get_entry(params['effect_params']['effect_algo'])
-        
+
         return Astrocyte(params, state_fn, effect_fn, dt=cfg['sim']['dt'])
         
 
@@ -43,8 +43,11 @@ class Astrocyte:
 
         return self._effect(state)
 
+    def __call__(self, *args):
+        return self.forward(*args)
+
 
 registry.add_entry("astro_state_prop_inc_exp_decay", astro_state_prop_inc_exp_decay)
-registry.add_entry("astro_state_exp_avg", astro_state_prop_inc_exp_decay)
+registry.add_entry("astro_state_exp_avg", astro_state_exp_avg)
 registry.add_entry("astro_proportional_effect", astro_proportional_effect)
 registry.add_entry("astro_proportional_target_effect", astro_proportional_target_effect)

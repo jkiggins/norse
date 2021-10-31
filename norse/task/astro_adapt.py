@@ -53,16 +53,14 @@ def _linear_from_params(in_features, out_features, params):
 class AstroAdaptNet(torch.nn.Module):
     # TODO: Convert to from_cfg format
     def __init__(self, cfg,
-                 lif_params,
-                 linear_params,
                  optimizer=None,
                  optimize=True,
-                 topology=None,
                  dt=0.001,
                  dtype=torch.float):
 
         super(AstroAdaptNet, self).__init__()
 
+        self.cfg = cfg
         dt = cfg['sim']['dt']
         
         self.optimizer = optimizer
@@ -71,36 +69,42 @@ class AstroAdaptNet(torch.nn.Module):
         self.monitors = []
 
         self.init = False
-        self.topology_forward_fn = getattr(self, topology)
-        self.topology_forward_fn(None)
+        self.topology = getattr(self, cfg['topology'])
+        self.topology_cfg = cfg.deref('topology')
+        self.topology(None)
+
+
 
 
     def from_cfg(cfg, optimizer):
-        top = cfg.deref('topology')
-        top = top.as_dict(ordered=True)
-
         return AstroAdaptNet(cfg,
-                             lif_params=cfg['lif_params'],
-                             linear_params=cfg['linear_params'],
                              optimizer=optimizer,
                              optimize=cfg['learning']['optimize'],
-                             topology=cfg['topology'],
                              dt=cfg['sim']['dt'])
 
 
-    def adapt_ff_v1(self, z, **kwargs):
+    def adapt_ff_v1(self, z):
         # This code path is taken once
         if not self.init:
-            self.linear = _linear_from_params(1, 1, self.cfg['linear_params'])
-            self.lif = (_lif_from_params(cfg['lif_params'], dt=0.001), None)
-            self.astro = (Astrocyte.from_cfg(cfg), None)
+            num_inputs = self.topology_cfg['num_inputs']
+            self.linear = _linear_from_params(
+                num_inputs,
+                1,
+                self.cfg['linear_params'])
+            
+            self.lif = (_lif_from_params(self.cfg['lif_params'], dt=0.001), None)
+            self.astro = (Astrocyte.from_cfg(self.cfg), None)
             self.last_astro_effect = None
+            
+            self.init = True
+            return
 
         # Normal forward behavior
         z_pre = z
-        z = self.liner(z)
+        z = self.linear(z)
 
-        if self.last_astro_effect: z += self.last_astro_effect
+        if not (self.last_astro_effect is None):
+            z = z + self.last_astro_effect
         
         z, state = self.lif[0](z, self.lif[1])
         self.lif = (self.lif[0], state)
@@ -111,45 +115,46 @@ class AstroAdaptNet(torch.nn.Module):
 
         return z, self.lif[1], self.astro[1], effect
 
+
+    def adapt_ff_v2(self, z):
+        # This code path is taken once
+        if not self.init:
+            width = self.topology_cfg['num_inputs']
+            self.linear = _linear_from_params(width, 1, self.cfg['linear_params'])
+            self.lif = (_lif_from_params(self.cfg['lif_params'], dt=0.001), None)
+            self.astro = (Astrocyte.from_cfg(self.cfg), None)
+            self.last_astro_effect = None
             
-    def forward(self, z):
+            self.init = True
+            return
+
+        # Normal forward behavior
         z_pre = z
 
-        output_node = None
-        lif_state = None
-        astro_state = None
-        astro_effect = None
+        if self.topology_cfg['astro_after_linear']:
+            z = self.linear(z)
+
+            effect, state = self.astro[0](z, self.astro[1])
+            self.astro = (self.astro[0], state)
+
+        else:
+            effect, state = self.astro[0](z, self.astro[1])
+            self.astro = (self.astro[0], state)
+
+            z = self.linear(z)
+
+        z += effect
+
+        z, state = self.lif[0](z, self.lif[1])
+        self.lif = (self.lif[0], state)
         
-        # Iterate through topology, applying modules along the graph
-        for k, node in topology.items():
-            last_nodes = toplogy[node['last']]
-            next_nodes = toplogy[node['next']]
-            
-            # For now, there is a single input
-            if node['type'] == 'input':
-                node['z'] = z
-                
-            elif node['type'] in ['lif', 'astrocyte']:
-                
-                node['z'], state = node['module'](last_node['z'])
-                node['module'] = (node['module'][0], state)
-                
-            else:
-                node['z'] = node['module'](last_node['z'])
+        return z, self.lif[1], self.astro[1], effect
 
-            # Collect states and effect
-            if node['type'] == 'lif':
-                lif_state = node['module'][1]
-            elif node['type'] == 'astrocyte':
-                astro_state = node['module'][1]
-                astro_effect = node['z']
-            
-            output_node = node
-            
+    
+    def forward(self, z):
+        return self.topology(z)
 
-        return output_node['z'], lif_state, astro_state, effect
-
-
+    
 def _graph_sim(cfg, monitor):
     fig = plt.Figure(figsize=(10, 15))
 
@@ -191,14 +196,14 @@ def _graph_sim(cfg, monitor):
     ax.set_title("Presynaptic Moving Average")
     ax.set_xlabel("Time")
     ax.set_ylabel("Moving Average Firing Rate")
-    trace = monitor.trace("pre_avg_rate")
+    trace = monitor.trace("pre_avg_rate", as_numpy=True)
     ax.plot(trace)
 
     ax = fig.add_subplot(*subplot_shape, 6)
     ax.set_title("Postsynpatic Moving Average")
     ax.set_xlabel("Time")
     ax.set_ylabel("Moving Average Firing Rate")
-    trace = monitor.trace("post_avg_rate")
+    trace = monitor.trace("post_avg_rate", as_numpy=True)
     ax.plot(trace)
 
     fig.subplots_adjust(left=0.1,
@@ -209,44 +214,64 @@ def _graph_sim(cfg, monitor):
                         hspace=0.4)
 
     path = pathlib.Path(logger.get_path())/"{}.png".format(cfg['sim']['sim_name'])
+    print("Saving Graphs: ", str(path))
     fig.savefig(str(path), bbox_inches="tight")
 
 
-def _graph_experiment(cfg, monitor):
+def _graph_experiment(cfg, exp_cfg, monitor):
+
     fig = plt.Figure()
 
-    ax = fig.add_subplot(2,1,1)
-    ax.set_title("Pre and Post Synaptic Volume vs. Input Frequency")
-    ax.set_xlabel("Input Poisson Rate")
-    ax.set_ylabel("Spiking Volume")
+    num_graphs = len(exp_cfg['graphs'])
+    subplot_shape = (num_graphs, 1)
+    subplot_idx = 1
     
-    pre_trace = monitor.trace("pre_volume")
-    rate_trace = monitor.trace("rate")
-    ax.plot(rate_trace, pre_trace, label="Pre")
+    if 'volume_v_state_alpha' in exp_cfg['graphs']:
+        ax = fig.add_subplot(*subplot_shape, subplot_idx)
+        subplot_idx += 1
 
-    post_trace = monitor.trace("post_volume")
-    ax.plot(rate_trace, post_trace, label="Post")
-
-
-    ax = fig.add_subplot(2,1,2)
-    ax.set_title("Pre and Post Synaptic Volume vs. Tau")
-    ax.set_xlabel("Tau")
-    ax.set_ylabel("Spiking Volume")
+        ax.set_title("Pre and Post Synaptic Volume vs. State Alpha")
+        ax.set_xlabel("State Alpha")
+        ax.set_ylabel("Spike Volume")
     
-    pre_trace = monitor.trace("pre_volume")
-    tau_trace = monitor.trace("tau")
-    ax.plot(tau_trace, pre_trace, label="Pre")
+        pre_trace = monitor.trace("pre_volume")
+        state_alpha_trace = monitor.trace("alpha")
+        ax.plot(state_alpha_trace, pre_trace, label="Pre")
 
-    post_trace = monitor.trace("post_volume")
-    ax.plot(tau_trace, post_trace, label="Post")
+        post_trace = monitor.trace("post_volume")
+        ax.plot(state_alpha_trace, post_trace, label="Post")
+        ax.legend()
 
 
+    if 'range_v_state_alpha' in exp_cfg['graphs']:
+        ax = fig.add_subplot(*subplot_shape, subplot_idx)
+        subplot_idx += 1
+
+        ax.set_title("Pre and Post Synaptic Moving Average Range vs. State Alpha")
+        ax.set_xlabel("State Alpha")
+        ax.set_ylabel("Moving Average Range")
+    
+        pre_trace = monitor.trace("pre_range")
+        state_alpha_trace = monitor.trace("alpha")
+        ax.plot(state_alpha_trace, pre_trace, label="Pre")
+
+        post_trace = monitor.trace("post_range")
+        ax.plot(state_alpha_trace, post_trace, label="Post")
+        ax.legend()
+
+
+    fig.subplots_adjust(left=0.1,
+                        bottom=0.4, 
+                        right=0.9, 
+                        top=1.4, 
+                        wspace=0.4, 
+                        hspace=0.4)
+    
     path = pathlib.Path(logger.get_path())/"{}.png".format(cfg['sim']['exp_name'])
 
     fig.legend()
+    print("Saving Graphs: ", str(path))
     fig.savefig(str(path), bbox_inches="tight")
-
-    
 
 
 def _sim(cfg, data, model, monitor, optimizer=None):
@@ -272,7 +297,7 @@ def _sim(cfg, data, model, monitor, optimizer=None):
         monitor("post", z)
         monitor("astro_state", astro_state['t_z'])
         monitor("astro_effect", astro_effect)
-        monitor("weight", float(model.linear.weight.data.view(-1)))
+        monitor("weight", model.linear.weight.data.view(-1).tolist())
 
     monitor.moving_average('pre', 'pre_avg_rate', window=50)
     monitor.moving_average('post', 'post_avg_rate', window=50)
@@ -282,18 +307,20 @@ def _sim(cfg, data, model, monitor, optimizer=None):
     
 def _experiment(cfg, exp_cfg, name=None):
     monitor = logger.TraceLogger()
+
+    print("Experiment: ", name)
+
+    cfg['sim']['exp_name'] = _exp_name_from_cfg(cfg, name)
     
     for i, next_cfg in enumerate(config.iter_configs(cfg, exp_cfg)):
         next_cfg['sim']['sim_name'] = _sim_name_from_cfg(next_cfg, i)
-        next_cfg['sim']['exp_name'] = _exp_name_from_cfg(next_cfg, name)
-
-        print(yaml.dump(next_cfg.as_dict()))
 
         data = _get_data(next_cfg)
         stdp_optimizer = STDPOptimizer.from_cfg(next_cfg)
         model = AstroAdaptNet.from_cfg(next_cfg, stdp_optimizer)
 
-        _sim(cfg, data, model, monitor, optimizer=stdp_optimizer)
+        print("Running:", next_cfg['sim']['sim_name'])
+        _sim(next_cfg, data, model, monitor, optimizer=stdp_optimizer)
 
         # Aggregate stats
         pre_trace = monitor.trace('pre', as_tensor=True)
@@ -301,10 +328,16 @@ def _experiment(cfg, exp_cfg, name=None):
         monitor('post_volume', post_trace.sum())
         monitor('pre_volume', pre_trace.sum())
 
+        pre_trace = monitor.trace('pre_avg_rate', as_tensor=True)
+        post_trace = monitor.trace('post_avg_rate', as_tensor=True)
+        monitor('pre_range', pre_trace.max() - pre_trace.min())
+        monitor('post_range', post_trace.max() - post_trace.min())
+
         monitor('rate', next_cfg['data']['stops'])
         monitor('tau', next_cfg['astro_params']['tau'])
+        monitor('alpha', next_cfg['astro_params']['alpha'])
 
-    _graph_experiment(cfg, monitor)
+    _graph_experiment(cfg, exp_cfg, monitor)
 
         
 def _gen_poisson_ramp(cfg):
@@ -315,26 +348,38 @@ def _gen_poisson_ramp(cfg):
 
     if not hasattr(stops, '__iter__'):
         stops = [stops]
-    
     if len(stops) == 0:
         raise ValueError("At least one stop is needed for poisson ramp")
-    elif len(stops) == 1:
-        rate_seq = stops
-    else:
-        rate_seq = torch.Tensor([])
-        steps_per_stop = int(steps / (len(stops) - 1))
+    if not hasattr(stops[0], '__iter__'):
+        stops = [stops]
         
-        for i in range(len(stops)-1):
-            start = stops[i]
-            stop = stops[i+1]
-            
-            rate_seq = torch.cat((rate_seq, torch.linspace(start, stop, steps_per_stop+1)))
+    # stops should be [[seq for out 1], [seq for out 2], ...]
 
+    stops = torch.Tensor(stops)
+    rate_seqs = []
+    for i, seq in enumerate(stops):
+        # If there is only one rate, pass it along
+        if len(seq) == 1:
+            rate_seqs.append(torch.Tensor(seq))
+            continue
+
+        # Else, expand the stops into a sequence of rates
+        seq_exp = torch.Tensor([])
+        steps_per_stop = int(steps / len(stops))
+        
+        for i in range(len(seq) - 1):
+            start = float(seq[i])
+            end = float(seq[i+1])
+            seq_exp = torch.cat((seq_exp, torch.linspace(start, end, steps_per_stop+1)))
+
+        rate_seqs.append(seq_exp)
+
+    # Transpose so axis 0 is iters
+    rate_seq = torch.stack(rate_seqs).transpose(1,0)
+    
     while True:
         for rate in rate_seq:
-            p_rate = torch.ones((width)) * rate
-
-            spike_vector = torch.poisson(torch.as_tensor(p_rate)).view(1)
+            spike_vector = torch.poisson(rate).view(width)
             
             yield (spike_vector > 0.1)*1.0
     
@@ -352,12 +397,11 @@ def _get_data(cfg):
         return _get_gen_data(cfg)
 
 
-def _sim_name_from_cfg(cfg, i):
-
+def _sim_name_from_cfg(cfg, i):    
     astro_config = cfg['astro_params']
     effect_config = astro_config.deref('effect_params')
 
-    name = ""
+    name = cfg['sim']['exp_name'] + "_"
 
     if 'alpha' in astro_config:
         name += "alpha{:07.3f}_".format(astro_config['alpha'])
@@ -392,10 +436,11 @@ def _main():
     logger.set_path('./runs/astro_adapt')
 
     cfg = config.load_config(args.config)
-    
+
     with torch.no_grad():
         for exp_name in cfg['meta']['experiments']:
-            _experiment(cfg, cfg['meta'][exp_name], name=exp_name)
+            exp_cfg = cfg['meta'][exp_name]
+            _experiment(cfg, exp_cfg, name=exp_name)
         
         
 if __name__ == '__main__':

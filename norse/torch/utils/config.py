@@ -14,6 +14,9 @@ class ConfigValue:
     def __call__(self):
         return self.val
 
+    def __repr__(self):
+        return "ConfigValue({})".format(self.val)
+
 
 class ConfigVariation(ConfigValue):
     def __init__(self, gen):
@@ -42,21 +45,50 @@ class ConfigVariation(ConfigValue):
         return self(), rollover
 
 
+    def __repr__(self):
+        return "ConfigVariation({})".format(self.val)
+
+
 
 class Config:
-    def __init__(self, cfg_dict):
+    def __init__(self, cfg_dict):        
         self.cfg_dict = OrderedDict()
+
+        # if '__inherit__' in cfg_dict:
+        #     inherit_cfg = Config(cfg_dict['__inherit__'])
+        #     self.apply(inherit_cfg)
+        #     del cfg_dict['__inherit__']
+
+        
         for key in cfg_dict:
             val = cfg_dict[key]
-            val = ConfigValue(val)
-            if type(val()) == dict:
-                val = Config(val())
-            elif type(val()) == str:
-                var = Config._parse_variation(val())
+
+            # If the val is a dict, make a config out of it, then apply to current value at that key (if present)
+            if Config._is_like_dict(val):
+                val = Config(val)
+                if not (key in self.cfg_dict):
+                    self.cfg_dict[key] = Config({})
+                    
+                self.cfg_dict[key].apply(val, objects=True)
+
+            # If the val is a string, check if it is a variation string, save otherwise
+            elif type(val) == str:
+                var = Config._parse_variation(val)
                 if not (var is None):
                     val = var
+                
+                self.cfg_dict[key] = val
 
-            self.cfg_dict[key] = val
+            # It's just a value, save it
+            else:
+                self.cfg_dict[key] = val
+
+    def _is_like_dict(val):
+        return type(val) in [dict, OrderedDict]
+
+    def _is_like_value(val):
+        return type(val) in [ConfigValue, ConfigVariation]
+
 
     def __iter__(self):
         for key in self.keys():
@@ -66,21 +98,31 @@ class Config:
     def __getitem__(self, key):
         val = self.cfg_dict[key]
 
-        if type(val) in [ConfigValue, ConfigVariation]:
+        if Config._is_like_value(val):
             return val()
 
         return val
 
+    def __copy__(self):
+        return Config(self.as_dict(ordered=True))
+
     
     def __setitem__(self, key, val):
-        if type(val) == dict:
+        if Config._is_like_dict(val):
             self.cfg_dict[key] = Config(val)
+        elif type(val) == Config:
+            self.cfg_dict[key] = val
+        elif Config._is_like_value(val):
+            self.cfg_dict[key] = val
         else:
             self.cfg_dict[key] = ConfigValue(val)
 
 
     def __repr__(self):
-        return pformat(self.as_dict())
+        cfg_dict = self.as_dict(objects=True)
+
+        # return yaml.dump(cfg_dict)
+        return pformat(cfg_dict)
 
 
     def __call__(self):
@@ -92,7 +134,7 @@ class Config:
         return self[key]
         
         
-    def as_dict(self, ordered=False):
+    def as_dict(self, ordered=False, objects=False):
         if ordered:
             repr_dict = OrderedDict()
         else:
@@ -100,7 +142,9 @@ class Config:
         
         for key in self:
             if type(self[key]) == Config:
-                repr_dict[key] = self[key].as_dict(ordered=ordered)
+                repr_dict[key] = self[key].as_dict(ordered=ordered, objects=objects)
+            elif objects:
+                repr_dict[key] = self.cfg_dict[key]
             else:
                 repr_dict[key] = self[key]
 
@@ -142,20 +186,22 @@ class Config:
                     yield next_cfg.cfg_dict[key]
                 else:
                     yield next_cfg[key]
-                    
 
 
-    def apply(self, overlay):
+    def apply(self, overlay, objects=False):
         _next = [(overlay, self)]
 
         while len(_next) > 0:
             overlay, cfg = _next.pop(0)
             for key in overlay:
-                if key in cfg:
-                    if type(cfg[key]) == Config:
-                        _next.append((overlay[key], cfg[key]))
-                    else:
-                        cfg[key] = overlay[key]
+                if type(overlay[key]) == Config:
+                    if not (key in cfg):
+                        cfg[key] = {}
+                    _next.append((overlay[key], cfg[key]))
+                elif objects:
+                    cfg[key] = overlay.cfg_dict[key]
+                else:
+                    cfg[key] = overlay[key]
         
         
 def load_config(path):
@@ -174,9 +220,10 @@ def iter_variations(cfg, strategy):
     # Make list of ConfigVariation objects in cfg
     variations = []
     for node in cfg.traverse(bredth=True, objects=True):
+        print(type(node))
         if type(node) == ConfigVariation:
             variations.append(node)
-
+    
     stop = False
     while not stop:
         yield cfg
@@ -201,6 +248,8 @@ def iter_variations(cfg, strategy):
 
 def iter_configs(cfg, exp_cfg):
     overlay = exp_cfg['overlay']
+
+    cfg = copy.deepcopy(cfg)
 
     for v in iter_variations(overlay, exp_cfg['variation_strategy']):
         cfg.apply(v)

@@ -189,23 +189,41 @@ class TraceLogger:
             
             self.traces[name][dict_key].append(val)
 
+
+    def _is_stackable(x):
+        stackable = False
+        x_0 = x[0]
+        if type(x_0) == torch.Tensor:
+            if len(x_0.shape) > 0:
+                # if x is like [Tensor([...]), Tensor([...]), ...] then it is stackable
+                stackable |= x_0.shape[0] > 1
+                
+        return stackable
+                
+            
         
-    def trace(self, name, values=None, as_tensor=False):
+    def trace(self, name, values=None, as_tensor=False, as_numpy=False):
         if not (values is None):
             self._init_trace(self.traces, name, [])
             self.traces[name] = list(values)
         else:
             trace = self.traces[name]
-            if as_tensor:
-                trace = torch.as_tensor(trace)
-            
+            if as_tensor or as_numpy:
+                if TraceLogger._is_stackable(trace):
+                    trace = torch.stack(trace)
+                else:
+                    trace = torch.as_tensor(trace)
+
+            if as_numpy:
+                trace = trace.cpu().numpy()
+                
             return trace
 
 
     def moving_average(self, name, dest_name, window=10):
         trace = self.trace(name, as_tensor=True)
         trace_unfolded = trace.unfold(0, window, 1)
-        trace_avg = trace_unfolded.mean(axis=1)
+        trace_avg = trace_unfolded.mean(axis=-1)
 
         self.trace(dest_name, values=trace_avg)
         
