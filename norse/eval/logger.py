@@ -176,6 +176,9 @@ class TraceLogger:
     def names(self):
         return list(self.traces.keys())
 
+    def has_trace(self, trace_name):
+        return trace_name in self.names()
+
     def __call__(self, name, *args):
         if len(args) == 1:
             self._init_trace(self.traces, name, [])

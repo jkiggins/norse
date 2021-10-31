@@ -181,8 +181,14 @@ def _graph_sim(cfg, monitor):
     ax.set_title("Astrocyte State Trace")
     ax.set_xlabel("Time")
     ax.set_ylabel("State")
-    trace = monitor.trace("astro_state")
-    ax.plot(trace, label='State')
+    if monitor.has_trace('astro_state'):
+        trace = monitor.trace("astro_state")
+        ax.plot(trace, label='State')
+    elif monitor.has_trace('astro_state_1'):
+        trace = monitor.trace("astro_state_1")
+        ax.plot(trace, label='State1')
+        trace = monitor.trace("astro_state_2")
+        ax.plot(trace, label='State2')
     ax.legend()
     
     ax = fig.add_subplot(*subplot_shape, 4)
@@ -235,7 +241,11 @@ def _graph_experiment(cfg, exp_cfg, monitor):
         ax.set_ylabel("Spike Volume")
     
         pre_trace = monitor.trace("pre_volume")
-        state_alpha_trace = monitor.trace("alpha")
+        if monitor.has_trace('alpha'):
+            state_alpha_trace = monitor.trace("alpha")
+        elif monitor.has_trace('alpha1'):
+            state_alpha_trace = monitor.trace("alpha1")
+
         ax.plot(state_alpha_trace, pre_trace, label="Pre")
 
         post_trace = monitor.trace("post_volume")
@@ -252,7 +262,11 @@ def _graph_experiment(cfg, exp_cfg, monitor):
         ax.set_ylabel("Moving Average Range")
     
         pre_trace = monitor.trace("pre_range")
-        state_alpha_trace = monitor.trace("alpha")
+        if monitor.has_trace('alpha'):
+            state_alpha_trace = monitor.trace("alpha")
+        if monitor.has_trace('alpha1'):
+            state_alpha_trace = monitor.trace("alpha1")
+            
         ax.plot(state_alpha_trace, pre_trace, label="Pre")
 
         post_trace = monitor.trace("post_range")
@@ -295,7 +309,11 @@ def _sim(cfg, data, model, monitor, optimizer=None):
         # Graph a timeline of intermediate steps
         monitor("pre", spike_vector)
         monitor("post", z)
-        monitor("astro_state", astro_state['t_z'])
+        if 't_z' in astro_state:
+            monitor("astro_state", astro_state['t_z'])
+        if 't_z1' in astro_state:
+            monitor("astro_state_1", astro_state['t_z1'])
+            monitor("astro_state_2", astro_state['t_z2'])
         monitor("astro_effect", astro_effect)
         monitor("weight", model.linear.weight.data.view(-1).tolist())
 
@@ -334,8 +352,15 @@ def _experiment(cfg, exp_cfg, name=None):
         monitor('post_range', post_trace.max() - post_trace.min())
 
         monitor('rate', next_cfg['data']['stops'])
-        monitor('tau', next_cfg['astro_params']['tau'])
-        monitor('alpha', next_cfg['astro_params']['alpha'])
+        
+        if 'tau' in next_cfg['astro_params']:
+            monitor('tau', next_cfg['astro_params']['tau'])
+
+        if 'alpha' in next_cfg['astro_params']:
+            monitor('alpha', next_cfg['astro_params']['alpha'])
+        elif 'alpha1' in next_cfg['astro_params']:
+            monitor('alpha1', next_cfg['astro_params']['alpha1'])
+            monitor('alpha2', next_cfg['astro_params']['alpha2'])
 
     _graph_experiment(cfg, exp_cfg, monitor)
 
@@ -365,12 +390,12 @@ def _gen_poisson_ramp(cfg):
 
         # Else, expand the stops into a sequence of rates
         seq_exp = torch.Tensor([])
-        steps_per_stop = int(steps / len(stops))
+        steps_per_stop = int(steps / (len(seq) - 1))
         
         for i in range(len(seq) - 1):
             start = float(seq[i])
             end = float(seq[i+1])
-            seq_exp = torch.cat((seq_exp, torch.linspace(start, end, steps_per_stop+1)))
+            seq_exp = torch.cat((seq_exp, torch.linspace(start, end, steps_per_stop)))
 
         rate_seqs.append(seq_exp)
 
@@ -404,7 +429,12 @@ def _sim_name_from_cfg(cfg, i):
     name = cfg['sim']['exp_name'] + "_"
 
     if 'alpha' in astro_config:
-        name += "alpha{:07.3f}_".format(astro_config['alpha'])
+        try:
+            name += "alpha{:07.3f}_".format(astro_config['alpha'])
+        except:
+            import code
+            code.interact(local=dict(globals(), **locals()))
+            exit(1)
     if 'tau' in astro_config:
         name += "tau{:07.3f}_".format(astro_config['alpha'])
     

@@ -220,10 +220,9 @@ def iter_variations(cfg, strategy):
     # Make list of ConfigVariation objects in cfg
     variations = []
     for node in cfg.traverse(bredth=True, objects=True):
-        print(type(node))
         if type(node) == ConfigVariation:
             variations.append(node)
-    
+   
     stop = False
     while not stop:
         yield cfg

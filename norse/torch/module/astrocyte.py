@@ -22,11 +22,18 @@ class Astrocyte:
     def from_cfg(cfg):
         effect_params = cfg['astro_params'].deref('effect_params')
 
-        params = {
-            'alpha': cfg['astro_params']['alpha'],
-            'tau': cfg['astro_params']['tau'],
-            'effect_params': effect_params.as_dict()
-        }
+        if cfg['astro_params']['state_update_algo'] == 'astro_state_prop_inc_exp_decay':
+            params = {
+                'alpha': cfg['astro_params']['alpha'],
+                'tau': cfg['astro_params']['tau'],
+                'effect_params': effect_params.as_dict()
+            }
+        elif cfg['astro_params']['state_update_algo'] == 'astro_state_exp_avg':
+            params = {
+                'alpha1': cfg['astro_params']['alpha1'],
+                'alpha2': cfg['astro_params']['alpha2'],
+                'effect_params': effect_params.as_dict()
+            }
 
         state_fn = registry.get_entry(cfg['astro_params']['state_update_algo'])
         effect_fn = registry.get_entry(params['effect_params']['effect_algo'])

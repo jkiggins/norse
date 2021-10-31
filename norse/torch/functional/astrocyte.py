@@ -57,13 +57,16 @@ def astro_state_prop_inc_exp_decay(z, params, state, dt=0.001):
 def astro_state_exp_avg(z, params, state, dt=0.001):
     if state is None:
         print("Astro state is None")
-        state = {'t_z': 0.0}
+        state = {'t_z1': 0.0, 't_z2': 0.0}
 
     if len(z) > 1:
         z = float(z.mean())
 
-    t_z_new = state['t_z'] * (1.0 - params['alpha']) + z * params['alpha']
-    state['t_z'] = t_z_new
+    t_z1_new = state['t_z1'] * (1.0 - params['alpha1']) + z * params['alpha1']
+    t_z2_new = state['t_z2'] * (1.0 - params['alpha2']) + z * params['alpha2']
+    
+    state['t_z1'] = t_z1_new
+    state['t_z2'] = t_z2_new
 
     return state
 
@@ -76,7 +79,7 @@ def astro_proportional_target_effect(state, params):
 
 
 def astro_proportional_effect(state, params):
-    cur = params['effect_params']['alpha'] * (state['t_z'])
+    cur = params['effect_params']['alpha'] * (state['t_z1'] - state['t_z2'])
 
     return cur, state
 
