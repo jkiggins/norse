@@ -79,9 +79,11 @@ def astro_proportional_target_effect(state, params):
 
 
 def astro_proportional_effect(state, params):
-    cur = params['effect_params']['alpha'] * (state['t_z1'] - state['t_z2'])
+    s = state['t_z2'] - (torch.abs(state['t_z2'] - state['t_z1']))
 
-    return cur, state
+    cur_supress = params['effect_params']['alpha'] * s
+
+    return cur_supress, state
 
 
 # def astro_const_effect(state, params):
