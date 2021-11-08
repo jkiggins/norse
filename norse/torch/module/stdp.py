@@ -1,6 +1,7 @@
 import torch
 
 from norse.torch.module.lif import LIFCell
+from norse.torch.module.synapse import Synapse
 from norse.torch.functional.stdp import stdp_step_linear, stdp_step_conv2d, STDPState, STDPParameters
 
 class STDPOptimizer:
@@ -71,9 +72,10 @@ class STDPOptimizer:
     def _stdp_step(self, module, z_pre, z, name, reward=1.0, dt=0.001):
         def _is_conv(module):
             return type(module) == torch.nn.Conv2d
-    
         def _is_linear(module):
             return type(module) == torch.nn.Linear
+        def _is_synapse(module):
+            return type(module) == Synapse
 
         self.init_stdp(module, z_pre, z)
         
@@ -87,7 +89,7 @@ class STDPOptimizer:
                 self.stdp_conv_params,
                 dt=dt,
             )
-        elif _is_linear(module):
+        elif _is_linear(module) or _is_synapse(module):
             w, stdp_state, dw = stdp_step_linear(
                 z_pre, z, w,
                 stdp_state,

@@ -7,6 +7,7 @@ from norse.torch.functional.astrocyte import (
     astro_state_exp_avg,
     astro_proportional_target_effect,
     astro_proportional_effect,
+    astro_boolean_effect
 )
 
 from norse.torch.utils import registry, config
@@ -58,3 +59,4 @@ registry.add_entry("astro_state_prop_inc_exp_decay", astro_state_prop_inc_exp_de
 registry.add_entry("astro_state_exp_avg", astro_state_exp_avg)
 registry.add_entry("astro_proportional_effect", astro_proportional_effect)
 registry.add_entry("astro_proportional_target_effect", astro_proportional_target_effect)
+registry.add_entry("astro_boolean_effect", astro_boolean_effect)

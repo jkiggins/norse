@@ -68,7 +68,7 @@ def _synapse_from_params(features, params):
     return layer
 
 
-class AstroAdaptNet(torch.nn.Module):
+class AstroLearnNet(torch.nn.Module):
     # TODO: Convert to from_cfg format
     def __init__(self, cfg,
                  optimizer=None,
@@ -76,7 +76,7 @@ class AstroAdaptNet(torch.nn.Module):
                  dt=0.001,
                  dtype=torch.float):
 
-        super(AstroAdaptNet, self).__init__()
+        super(AstroLearnNet, self).__init__()
 
         self.cfg = cfg
         dt = cfg['sim']['dt']
@@ -93,51 +93,13 @@ class AstroAdaptNet(torch.nn.Module):
 
 
     def from_cfg(cfg, optimizer):
-        return AstroAdaptNet(cfg,
+        return AstroLearnNet(cfg,
                              optimizer=optimizer,
                              optimize=cfg['learning']['optimize'],
                              dt=cfg['sim']['dt'])
 
 
-    def adapt_ff_v1(self, z):
-        # This code path is taken once
-        if not self.init:
-            num_inputs = self.topology_cfg['num_inputs']
-            self.linear = _linear_from_params(
-                num_inputs,
-                1,
-                self.cfg['linear_params'])
-            self.weight_module = self.linear
-            
-            self.lif = (_lif_from_params(self.cfg['lif_params'], dt=0.001), None)
-            self.astro = (Astrocyte.from_cfg(self.cfg), None)
-            self.last_astro_effect = None
-            
-            self.init = True
-            return
-
-        # Normal forward behavior
-        z_pre = z
-        z = self.linear(z)
-
-        if not (self.last_astro_effect is None):
-            z = z + self.last_astro_effect
-        
-        z, state = self.lif[0](z, self.lif[1])
-        self.lif = (self.lif[0], state)
-
-        effect, state = self.astro[0](z, self.astro[1])
-        self.astro = (self.astro[0], state)
-        self.last_astro_effect = effect
-
-        if self.optimize and not (self.optimizer is None):
-            self.optimizer(self.weight_module, z_pre, z)
-            
-
-        return z, self.lif[1], self.astro[1]['t_z'], effect
-
-
-    def adapt_ff_v2(self, z):
+    def astro_learn_v1(self, z):
         # This code path is taken once
         if not self.init:
             num_inputs = self.topology_cfg['num_inputs']
@@ -151,7 +113,6 @@ class AstroAdaptNet(torch.nn.Module):
             input_mult = (torch.rand((num_inputs)) >= 0.5)
             self.astros = []
             self.astros.append((Astrocyte.from_cfg(self.cfg), input_mult.type(torch.int), None))
-            self.astros.append((Astrocyte.from_cfg(self.cfg), torch.logical_not(input_mult).type(torch.int), None))
             self.last_astro_effect = None
             
             self.init = True
@@ -161,12 +122,12 @@ class AstroAdaptNet(torch.nn.Module):
         # Apply weights
         z_pre = z
         z = self.synapse(z)
-        
-        # Apply astrocyte effect, then zero out for computation
-        if not (self.last_astro_effect is None):
-            z = z + self.last_astro_effect
-        self.last_astro_effect = torch.zeros_like(z)
 
+        # Astrocyte forward
+        for i, (a, a_mult, a_state) in enumerate(self.astros):
+            effect, state = a(z, a_state)
+            self.astros[i] = (a, a_mult, state)
+        
         # Finish "linear layer" step
         z = torch.max(torch.as_tensor(0.0), torch.sum(z)).view(1)
         
@@ -174,13 +135,11 @@ class AstroAdaptNet(torch.nn.Module):
         z, state = self.lif[0](z, self.lif[1])
         self.lif = (self.lif[0], state)
 
-        # Astrocyte forward
-        for i, (a, a_mult, a_state) in enumerate(self.astros):
-            effect, state = a(z, a_state)
-            self.last_astro_effect = effect * a_mult
-
-            self.astros[i] = (a, a_mult, state)
+            
         astro_states = torch.stack([a[2]['t_z'] for a in self.astros])
+
+        if self.optimizer and self.optimizer and effect >= 1:
+            self.optimizer(self.weight_module, z_pre, z)
 
         return z, self.lif[1], astro_states, effect
 
@@ -192,7 +151,7 @@ class AstroAdaptNet(torch.nn.Module):
 def _graph_sim(cfg, monitor):
     fig = plt.Figure(figsize=(10, 15))
 
-    subplot_shape = (7,1)
+    subplot_shape = (5,1)
     
     # Graph timelines
     ax = fig.add_subplot(*subplot_shape,1)
@@ -231,26 +190,25 @@ def _graph_sim(cfg, monitor):
     ax.plot(trace)
 
     ax = fig.add_subplot(*subplot_shape, 5)
-    ax.set_title("Presynaptic Moving Average")
-    ax.set_xlabel("Time")
-    ax.set_ylabel("Moving Average Firing Rate")
-    trace = monitor.trace("pre_avg_rate", as_numpy=True)
-    ax.plot(trace)
-
-    ax = fig.add_subplot(*subplot_shape, 6)
-    ax.set_title("Postsynpatic Moving Average")
-    ax.set_xlabel("Time")
-    ax.set_ylabel("Moving Average Firing Rate")
-    trace = monitor.trace("post_avg_rate", as_numpy=True)
-    ax.plot(trace)
-
-    ax = fig.add_subplot(*subplot_shape, 7)
     ax.set_title("Synaptic Weights vs. Time")
     ax.set_xlabel("Time")
     ax.set_ylabel("Synaptic Weights")
     trace = monitor.trace("weights")
     ax.plot(trace)
 
+    # ax = fig.add_subplot(*subplot_shape, 5)
+    # ax.set_title("Presynaptic Moving Average")
+    # ax.set_xlabel("Time")
+    # ax.set_ylabel("Moving Average Firing Rate")
+    # trace = monitor.trace("pre_avg_rate", as_numpy=True)
+    # ax.plot(trace)
+
+    # ax = fig.add_subplot(*subplot_shape, 6)
+    # ax.set_title("Postsynpatic Moving Average")
+    # ax.set_xlabel("Time")
+    # ax.set_ylabel("Moving Average Firing Rate")
+    # trace = monitor.trace("post_avg_rate", as_numpy=True)
+    # ax.plot(trace)
 
     fig.subplots_adjust(left=0.1,
                         bottom=0.4, 
@@ -426,7 +384,7 @@ def _experiment(cfg, exp_cfg, name=None):
                     
         data = _get_data(next_cfg)
         stdp_optimizer = STDPOptimizer.from_cfg(next_cfg)
-        model = AstroAdaptNet.from_cfg(next_cfg, stdp_optimizer)
+        model = AstroLearnNet.from_cfg(next_cfg, stdp_optimizer)
 
         print("Running:", next_cfg['sim']['sim_name'])
         _sim(next_cfg, data, model, monitor, optimizer=stdp_optimizer)

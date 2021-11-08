@@ -42,10 +42,10 @@ import torch
 def astro_state_prop_inc_exp_decay(z, params, state, dt=0.001):
     if state is None:
         print("Astro state is None")
-        state = {'t_z': 0.0}
+        state = {'t_z': torch.as_tensor(0.0)}
 
-    if len(z) > 1:
-        z = float(z.mean())
+    if z.numel() > 1:
+        z = z.squeeze().mean()
 
     t_z_new = state['t_z'] + z * params['alpha'] - state['t_z'] * params['tau'] * dt
     
@@ -86,14 +86,12 @@ def astro_proportional_effect(state, params):
     return cur_supress, state
 
 
-# def astro_const_effect(state, params):
-#     # If the activity is above a threshold, apply a constant current
-#     if state.t_z > params.activity_params.thr:
-#         cur = params.activity_params.const_effect
-#     else:
-#         cur = torch.as_tensor(0.0)
-
-#     return cur, state
+def astro_boolean_effect(state, params):
+    # If the activity is above a threshold, return 1.0. 0.0 otherwise
+    if state['t_z'] >= params['effect_params']['thr']:
+        return torch.as_tensor(1), state
+    else:
+        return torch.as_tensor(0), state
 
 
 # def astro_inc_dec_effect(state, params):
